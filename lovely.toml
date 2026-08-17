@@ -1,0 +1,113 @@
+[manifest]
+version = "1.0.0"
+dump_lua = true
+priority = 2147483647
+
+# EDITION
+[[patches]]
+[patches.pattern]
+target = 'card.lua'
+pattern = "if self.facing == 'front' then"
+position = 'after'
+payload = '''
+if (self.area == G.hand or self.area == G.jokers or self.area == G.consumeables) and self.edition and self.edition.cx_conceptual then
+    return
+end
+'''
+match_indent = true
+
+# (unflip-at-emplace moved to a CardArea:emplace Lua wrap in AlephNull.lua — Cryptid
+# rewrites this emplace line with its cry_flipped handling, so the exact-match pattern
+# above stopped applying and stake-flipped cards slipped through)
+[[patches]]
+[patches.pattern]
+target = 'cardarea.lua'
+pattern = "function CardArea:remove_from_highlighted(card, force)"
+position = 'after'
+payload = '''
+if card.edition and card.edition.cx_conceptual then
+    card.ability.forced_selection = false
+end
+'''
+match_indent = true
+
+[[patches]]
+[patches.pattern]
+target = 'card.lua'
+pattern = "function Card:set_debuff(should_debuff)"
+position = 'after'
+payload = '''
+if self.edition and self.edition.cx_conceptual then
+    if self.debuff then
+        self.debuff = false
+        if self.area == G.jokers then self:add_to_deck(true) end
+    end
+    return
+end
+'''
+match_indent = true
+
+# DECK
+# (back shader drawing moved to a SMODS.DrawStep in AlephNull.lua — the old card.lua
+# patch targeted vanilla Card:draw, which SMODS 1.0 replaces with its draw pipeline)
+[[patches]]
+[patches.pattern]
+target = "cardarea.lua"
+pattern = "self.config.highlighted_limit = config.highlight_limit or 5"
+position = "at"
+payload = "self.config.highlighted_limit = config.highlight_limit or G.GAME.modifiers.cx_highlight_limit or 5"
+match_indent = true
+
+# BOOSTER PACKS
+[[patches]]
+[patches.pattern]
+target = "game.lua"
+pattern = "G.shop_booster:emplace(card)"
+position = "before"
+payload = '''
+if G.GAME.modifiers.cx_edition then
+	card:set_edition(nil, true, true)
+end
+'''
+match_indent = true
+
+# ALEPH NULL TAKEOVER WATCHDOG
+[[patches]]
+[patches.pattern]
+target = "game.lua"
+pattern = "function Game:update(dt)"
+position = "after"
+payload = '''
+if CX_ALEPH_WATCHDOG then CX_ALEPH_WATCHDOG('lovely_game_update') end
+'''
+match_indent = true
+
+[[patches]]
+[patches.pattern]
+target = "blind.lua"
+pattern = "self.chip_text = number_format(self.chips)"
+position = "after"
+payload = '''
+if CX_ALEPH_BLIND_SET then CX_ALEPH_BLIND_SET('lovely_blind_set') end
+'''
+match_indent = true
+
+[[patches]]
+[patches.pattern]
+target = "functions/state_events.lua"
+pattern = "function end_round()"
+position = "after"
+payload = '''
+if CX_ALEPH_PRE_END_ROUND then CX_ALEPH_PRE_END_ROUND('lovely_end_round') end
+'''
+match_indent = true
+
+[[patches]]
+[patches.pattern]
+target = "functions/state_events.lua"
+pattern = "G.FUNCS.evaluate_round = function()"
+position = "after"
+payload = '''
+if CX_ALEPH_PRE_END_ROUND then CX_ALEPH_PRE_END_ROUND('lovely_evaluate_round') end
+'''
+match_indent = true
