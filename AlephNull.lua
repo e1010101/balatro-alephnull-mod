@@ -158,13 +158,27 @@ end
 -- The Entity appears in every shop, guaranteed. Runs from the per-frame watchdog:
 -- if the shop joker row has no Entity (fresh shop, reroll, or just bought), one
 -- materializes. create_card with a forced key skips the normal shop pool entirely.
+-- true if the shop holds an Entity; also culls any extras beyond the first,
+-- healing saves written before the resume-duplication fix
 local function cx_shop_has_entity()
+    local found = false
+    local extras = nil
     for _, card in ipairs(G.shop_jokers.cards) do
         if cx_is_entity_card(card) then
-            return true
+            if found then
+                extras = extras or {}
+                extras[#extras + 1] = card
+            else
+                found = true
+            end
         end
     end
-    return false
+    if extras then
+        for _, card in ipairs(extras) do
+            card:remove()
+        end
+    end
+    return found
 end
 
 local function cx_ensure_entity_in_shop()
