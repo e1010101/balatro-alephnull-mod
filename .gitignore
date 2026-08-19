@@ -1,0 +1,5 @@
+# local AI/indexing tooling — not part of the distributed mod
+.claude/
+.gitnexus/
+CLAUDE.md
+AGENTS.md

@@ -5,7 +5,7 @@
 #endif
 
 // vec2 named after the shader key — sent automatically by draw_shader
-extern MY_HIGHP_OR_MEDIUMP vec2 entity_base;
+extern MY_HIGHP_OR_MEDIUMP vec2 conceptual_back;
 // true animated clock, sent via SMODS.Shader send_vars
 extern MY_HIGHP_OR_MEDIUMP number cx_time;
 
@@ -66,67 +66,79 @@ number hash21(vec2 p)
     return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
 }
 
-// Overlay pass: drawn on top of the card base + edition. Mostly transparent —
-// the conceptual edition laminate stays visible; this just tears reality on top of it.
+// Deck-back exclusive: max-colour psychedelic plasma under intense datamosh-style
+// glitching. Brightness floor is high — the dark back art shapes the pattern but
+// never dims it.
 vec4 effect( vec4 colour, Image texture, vec2 texture_coords, vec2 screen_coords )
 {
     vec2 uv = (((texture_coords)*(image_details)) - texture_details.xy*texture_details.ba)/texture_details.ba;
 
     number T = cx_time;
     number seed = time * 0.001;
+    vec4 sil = Texel(texture, frame_uv(uv)); // unglitched sample — silhouette only
 
-    vec4 base = Texel(texture, frame_uv(uv));
-    vec4 outc = vec4(0.0);
+    // --- heavy glitch displacement (uv space), ~half of all ticks are glitching
+    number tick = floor(T*14.0);
+    number burst = step(0.55, hash21(vec2(tick, seed)));
 
-    vec3 cycle_col = 0.5 + 0.5*vec3(sin(1.3*T), sin(1.3*T + 2.094), sin(1.3*T + 4.188));
+    vec2 guv = uv;
+    // coarse block tears
+    vec2 block = floor(uv * vec2(6.0, 10.0));
+    number bh = hash21(block + tick);
+    guv.x += burst * step(0.5, bh) * (bh - 0.75) * 0.5;
+    // fine row jitter
+    number row = floor(guv.y * texture_details.a / 2.0);
+    number rh = hash21(vec2(row, tick*1.7));
+    guv.x += burst * step(0.7, rh) * (rh - 0.85) * 0.3;
+    // occasional vertical smear per column-block
+    guv.y += burst * step(0.8, hash21(vec2(block.x, tick))) * (hash21(block + 1.1) - 0.5) * 0.2;
 
-    // sweeping scan band travelling down the card
-    number band_pos = fract(0.27*T + 0.05*sin(entity_base.x));
-    number band = smoothstep(0.07, 0.0, abs(uv.y - band_pos));
-    outc.rgb += cycle_col * band * 0.4;
-    outc.a = max(outc.a, band * 0.26 * base.a);
+    number lum = dot(Texel(texture, frame_uv(guv)).rgb, vec3(0.299, 0.587, 0.114));
 
-    // glitch tears — 4px rows of the base art rip sideways with chromatic split
-    number tick = floor(T*10.0);
-    number burst = step(0.90, hash21(vec2(tick, seed + 3.3)));
-    number row = floor(uv.y * texture_details.a / 4.0);
-    number rh = hash21(vec2(row, tick));
-    number sel = step(0.62, rh);
-    vec2 tuv = uv;
-    tuv.x += burst * sel * (rh - 0.81) * 0.4;
-    number ab = 0.010 + 0.020*burst;
-    vec3 torn = vec3(Texel(texture, frame_uv(tuv + vec2(ab, 0.))).r,
-                     Texel(texture, frame_uv(tuv)).g,
-                     Texel(texture, frame_uv(tuv - vec2(ab, 0.))).b);
-    number tear_a = burst * sel * Texel(texture, frame_uv(tuv)).a * 0.9;
-    outc.rgb = mix(outc.rgb, torn, tear_a);
-    outc.a = max(outc.a, tear_a);
+    // --- dense fast plasma on the glitched coordinates
+    vec2 p = guv * 4.0;
+    p += 0.80*vec2(sin(2.1*p.y + 1.9*T), cos(1.7*p.x + 1.6*T));
+    p += 0.50*vec2(sin(3.3*p.y - 1.3*T + 1.7), cos(3.9*p.x + 1.1*T + 0.4));
+    p += 0.30*vec2(cos(5.7*p.y + 2.3*T), sin(5.1*p.x - 2.1*T));
 
-    // brief negative flash of the whole base on some bursts
-    number neg = burst * step(0.75, hash21(vec2(tick, 9.31)));
-    outc.rgb = mix(outc.rgb, vec3(1.0) - base.rgb, neg * 0.6);
-    outc.a = max(outc.a, neg * 0.45 * base.a);
+    number field = sin(p.x) + sin(p.y) + sin(p.x + p.y + 1.8*T) + sin(length(p)*2.0 - 1.5*T);
+    number phase = field*0.5 + lum*1.2 + 0.35*T + conceptual_back.x*0.4;
 
-    // pulsing rim glow tracing the card silhouette
+    // rainbow-fringed channels: r/b sample offset phase, harder during bursts
+    number d = 0.06 + 0.10*burst;
+    vec3 fringe = vec3(d, 0.0, -d);
+    vec3 colA = 0.5 + 0.5*cos(6.28318*(phase*2.2 + vec3(0.00, 0.33, 0.67) + fringe));
+    vec3 colB = 0.5 + 0.5*cos(6.28318*(phase*3.7 + 0.30*T + vec3(0.13, 0.74, 0.46) + fringe));
+    vec3 col = mix(colA, colB, 0.5 + 0.5*sin(field*1.7 + 2.0*T));
+
+    // high brightness floor — colourful even where the art is black
+    col *= 0.75 + 0.45*lum;
+
+    // saturation crank
+    number cl = dot(col, vec3(0.299, 0.587, 0.114));
+    col = clamp(mix(vec3(cl, cl, cl), col, 1.7), 0.0, 1.0);
+
+    // negative flash on some bursts
+    number inv = burst * step(0.75, hash21(vec2(tick, 3.3)));
+    col = mix(col, vec3(1.0) - col, inv*0.9);
+
+    // fast scanline shimmer
+    col *= 0.92 + 0.08*sin(uv.y*140.0 + 20.0*T);
+
+    // silhouette rim pulse
     number px = 1.5 / texture_details.b;
     number py = 1.5 / texture_details.a;
     number a_n = min(min(Texel(texture, frame_uv(uv + vec2(px, 0.))).a,
                          Texel(texture, frame_uv(uv - vec2(px, 0.))).a),
                      min(Texel(texture, frame_uv(uv + vec2(0., py))).a,
                          Texel(texture, frame_uv(uv - vec2(0., py))).a));
-    number rim = clamp(base.a - a_n, 0.0, 1.0) * (0.6 + 0.4*sin(3.1*T + uv.y*5.0));
-    outc.rgb += cycle_col * rim;
-    outc.a = max(outc.a, rim * 0.75);
+    number rim = clamp(sil.a - a_n, 0.0, 1.0);
+    col += rim * (0.5 + 0.5*cos(6.28318*(0.45*T + vec3(0.00, 0.33, 0.67))));
 
-    // faint iridescent sheen wave so the base never sits fully still
-    number wave = 0.5 + 0.5*sin(8.0*uv.x - 5.0*uv.y + 1.7*T);
-    outc.rgb += cycle_col * wave * 0.06;
-    outc.a = max(outc.a, 0.05 * wave * base.a);
+    // alpha from the UNGLITCHED silhouette so tears never leak past the card shape
+    vec4 tex = vec4(col, sil.a);
 
-    // scanline flicker on the overlay itself
-    outc.a *= 0.9 + 0.1*sin(uv.y*120.0 + 9.0*T);
-
-    return dissolve_mask(outc*colour, texture_coords, uv);
+    return dissolve_mask(tex*colour, texture_coords, uv);
 }
 
 extern MY_HIGHP_OR_MEDIUMP vec2 mouse_screen_pos;

@@ -17,6 +17,7 @@ local conceptual = function(self, card, badges)
 			{n=G.UIT.O, config={object = DynaText({
 				string = {'Joker', 'Conceptual', 'Joker', '???'},
 				colours = {G.C.color_rgb},
+				text_effect = 'cx_pop3d',
 				float = true,
 				rotate = true,
 				bump = true,
@@ -152,6 +153,35 @@ local function cx_enforce_conceptual_editions()
             card:flip()
         end
     end
+end
+
+-- The Entity appears in every shop, guaranteed. Runs from the per-frame watchdog:
+-- if the shop joker row has no Entity (fresh shop, reroll, or just bought), one
+-- materializes. create_card with a forced key skips the normal shop pool entirely.
+local function cx_ensure_entity_in_shop()
+    if not (G and G.STATE == G.STATES.SHOP and G.shop_jokers and G.shop_jokers.cards) then
+        return
+    end
+    if G.shop_jokers.cx_entity_pending then
+        return
+    end
+    for _, card in ipairs(G.shop_jokers.cards) do
+        if cx_is_entity_card(card) then
+            return
+        end
+    end
+    G.shop_jokers.cx_entity_pending = true
+    G.E_MANAGER:add_event(Event({func = function()
+        if G.STATE == G.STATES.SHOP and G.shop_jokers then
+            local card = create_card('Joker', G.shop_jokers, nil, nil, nil, nil, 'j_cx_entity')
+            card:set_edition({cx_conceptual = true}, true, true)
+            create_shop_card_ui(card, 'Joker', G.shop_jokers)
+            card:start_materialize()
+            G.shop_jokers:emplace(card)
+        end
+        if G.shop_jokers then G.shop_jokers.cx_entity_pending = nil end
+        return true
+    end}))
 end
 
 -- Conceptual cards can never be flipped face-down outside the deck/discard piles.
@@ -343,6 +373,7 @@ end
 
 CX_ALEPH_WATCHDOG = function(reason)
     cx_enforce_conceptual_editions()
+    cx_ensure_entity_in_shop()
     if cx_aleph_active() then
         cx_set_aleph_scoring()
         if cx_blind_ready() and G.STATE ~= G.STATES.SHOP then
@@ -521,6 +552,8 @@ function Card:add_to_deck(...)
         cx_mark_aleph_active('entity_added')
         self:set_eternal(true)
         self:set_edition({cx_conceptual = true}, true)
+        self.ability.extra_value = 1e100
+        self:set_cost()
         cx_set_aleph_scoring()
         CX_ALEPH_WATCHDOG('entity_added')
     end
@@ -610,21 +643,123 @@ SMODS.Shader {
 }
 
 SMODS.Shader {
-    key = 'entity_base',
-    path = 'entity_base.fs',
+    key = 'entity_fractal',
+    path = 'entity_fractal.fs',
     send_vars = function(sprite, card)
         return { cx_time = G.TIMERS.REAL }
     end
 }
 
--- glitch overlay on the Entity's card base, layered above the edition shader (order 20)
--- and below the floating sprite (order 60)
+SMODS.Shader {
+    key = 'conceptual_back',
+    path = 'conceptual_back.fs',
+    send_vars = function(sprite, card)
+        return { cx_time = G.TIMERS.REAL }
+    end
+}
+
+SMODS.Shader {
+    key = 'entity_text',
+    path = 'entity_text.fs',
+    send_vars = function(sprite, card)
+        return { cx_time = G.TIMERS.REAL }
+    end
+}
+
+-- 3-D pop-out text: each letter is an extruded stack. The extrusion layers step
+-- along the letter's shadow-parallax direction (so depth follows screen position
+-- like card shadows do) and breathe over time; the top face is drawn slightly
+-- toward the viewer and runs the entity_text psychedelic shader.
+SMODS.DynaTextEffect {
+    key = 'pop3d',
+    draw_shadow = function(dt, k, letter)
+        -- the extrusion is the depth; skip the flat drop shadow
+    end,
+    draw_letter = function(dt, k, letter)
+        -- SMODS' set_letter_shader sends letter.r to the shader unguarded, but the
+        -- engine only assigns letter.r once rotation animation ticks — nil on the
+        -- first draw, which crashes Shader:send. Seed it before any shader pass.
+        letter.r = letter.r or 0
+        local real_pop_in = dt.config.min_cycle_time == 0 and 1 or letter.pop_in
+        local FS = dt.font.FONTSCALE/G.TILESIZE
+        local norm = dt.ARGS.draw_shadow_norm or {x = 0.4*FS, y = 0.6*FS}
+        local bx = 0.5*(letter.dims.x - letter.offset.x)*FS + norm.x
+        local by = 0.5*(letter.dims.y - letter.offset.y)*FS + norm.y
+        local sc = real_pop_in*letter.scale*dt.scale*FS
+        local ox, oy = 0.5*letter.dims.x/dt.scale, 0.5*letter.dims.y/dt.scale
+        local t = G.TIMERS.REAL
+        local alpha = (dt.colours[1] and dt.colours[1][4]) or 1
+        local depth = 4
+        local amp = 1.0 + 0.5*math.sin(2.1*t + k*0.65)
+
+        for i = depth, 1, -1 do
+            local f = 0.10 + 0.09*(depth - i)
+            local hue = 6.28318*(0.65*t + k*0.11 + i*0.07)
+            love.graphics.setColor(
+                f*(0.5 + 0.5*math.cos(hue)),
+                f*(0.5 + 0.5*math.cos(hue + 2.094)),
+                f*(0.5 + 0.5*math.cos(hue + 4.188)),
+                alpha)
+            love.graphics.draw(letter.letter,
+                bx + i*amp*norm.x*2.2, by + i*amp*norm.y*2.2,
+                letter.r or 0, sc, sc, ox, oy)
+        end
+
+        love.graphics.setColor(1, 1, 1, alpha)
+        dt:set_letter_shader('cx_entity_text', nil, false, letter)
+        love.graphics.draw(letter.letter,
+            bx - amp*norm.x*1.2, by - amp*norm.y*1.2,
+            letter.r or 0, sc, sc, ox, oy)
+        dt:set_letter_shader()
+    end,
+}
+
+-- fractal shatter on the Entity's card base, layered above the edition shader (order 20)
+-- and below the floating sprite (order 60), then the JOKER-lettering layer drawn as a
+-- 3-D extrusion: a soft engine shadow (same style as the soul sprite's), translucent
+-- colour-cycling depth passes along the shadow-parallax direction, topped by a face
+-- pass running the card back's psychedelic shader.
+SMODS.draw_ignore_keys.cx_letters = true
+local cx_letters_layer_colour = {0, 0, 0, 0.55}
+
 SMODS.DrawStep {
     key = 'cx_entity_base',
     order = 25,
     func = function(self)
         if self.config.center.cx_entity and (self.config.center.discovered or self.bypass_discovery_center) then
-            self.children.center:draw_shader('cx_entity_base', nil, self.ARGS.send_to_shader)
+            self.children.center:draw_shader('cx_entity_fractal', nil, self.ARGS.send_to_shader)
+
+            local letters = self.children.cx_letters
+            if letters then
+                local t = G.TIMERS.REAL
+                local sp = self.shadow_parrallax
+                local mag = sp and math.sqrt(sp.x*sp.x + sp.y*sp.y) or 0
+                local nx = (mag > 0.0001) and sp.x/mag or 0
+                local ny = (mag > 0.0001) and sp.y/mag or -1
+                local amp = 0.5 + 0.5*math.sin(2.0*t)
+                local step = 0.02 + 0.018*amp
+                local fx, fy = -1.2*step*nx, -1.2*step*ny
+
+                -- soft drop shadow, same engine treatment as the soul sprite;
+                -- the drop grows as the letters rise
+                letters:draw_shader('dissolve', 0, nil, nil, self.children.center, nil, nil, nil, 0.08 + 0.06*amp, nil, 0.6)
+
+                -- translucent colour-cycling depth layers (lighter than pure black
+                -- so they read as depth, not as a heavy shadow)
+                for i = 3, 1, -1 do
+                    local f = 0.35 + 0.10*(3 - i)
+                    local hue = 6.28318*(0.65*t + i*0.09)
+                    cx_letters_layer_colour[1] = f*(0.5 + 0.5*math.cos(hue))
+                    cx_letters_layer_colour[2] = f*(0.5 + 0.5*math.cos(hue + 2.094))
+                    cx_letters_layer_colour[3] = f*(0.5 + 0.5*math.cos(hue + 4.188))
+                    letters.drawing_colour = cx_letters_layer_colour
+                    letters:draw_shader('dissolve', nil, nil, nil, self.children.center, nil, nil, i*step*nx, i*step*ny)
+                end
+                letters.drawing_colour = nil
+
+                -- psychedelic face, floating toward the viewer
+                letters:draw_shader('cx_conceptual_back', nil, self.ARGS.send_to_shader, nil, self.children.center, 0.03*amp, nil, fx, fy)
+            end
         end
     end,
     conditions = { vortex = false, facing = 'front' },
@@ -651,8 +786,7 @@ SMODS.DrawStep {
     order = 5,
     func = function(self)
         if cx_sprite_shows_conceptual_back(self.children.back) then
-            self.children.back:draw_shader('cx_conceptual', nil, self.ARGS.send_to_shader, true)
-            self.children.back:draw_shader('cx_entity_base', nil, self.ARGS.send_to_shader, true)
+            self.children.back:draw_shader('cx_conceptual_back', nil, self.ARGS.send_to_shader, true)
         end
     end,
     conditions = { vortex = false, facing = 'back' },
@@ -691,6 +825,22 @@ SMODS.Atlas {
 local set_spritesref = Card.set_sprites
 function Card:set_sprites(_center, _front)
 	set_spritesref(self, _center, _front)
+	if _center and _center.cx_entity then
+		-- dedicated JOKER-lettering layer: frame {2,0} of the entity_float atlas
+		-- holds just the corner text, extracted from the base art
+		if self.children.cx_letters then self.children.cx_letters:remove() end
+		self.children.cx_letters = Sprite(
+			self.T.x,
+			self.T.y,
+			self.T.w,
+			self.T.h,
+			G.ASSET_ATLAS[_center.atlas or _center.set],
+			{x = 2, y = 0}
+		)
+		self.children.cx_letters.role.draw_major = self
+		self.children.cx_letters.states.hover.can = false
+		self.children.cx_letters.states.click.can = false
+	end
 	if _center and _center.soul_pos and _center.soul_pos.extra then
 		self.children.floating_sprite2 = Sprite(
 			self.T.x,
@@ -795,13 +945,28 @@ SMODS.Edition({
     disable_base_shader = true,
 	no_shadow = true,
     shader = 'conceptual',
+    -- Split rendering: the card body gets vanilla polychrome (smooth rainbow tint),
+    -- while the front layer — rank/suit text and sprites — gets the plasma shader.
+    -- The busy effect lives in the glyphs; the calm base keeps them readable.
+    -- Jokers/consumables have no separate front layer, so their art (the center)
+    -- keeps the full plasma treatment.
+    draw = function(self, card, layer)
+        if card.children.front and not card:should_hide_front() then
+            card.children.center:draw_shader('polychrome', nil, card.ARGS.send_to_shader)
+            card.children.front:draw_shader(self.shader, nil, card.ARGS.send_to_shader)
+        else
+            card.children.center:draw_shader(self.shader, nil, card.ARGS.send_to_shader)
+        end
+    end,
 	sound = {
 		sound = 'cx_e_conceptual',
 		per = 1,
 		vol = 0.5
 	},
-    in_shop = true,
-    weight = 0.5,
+    -- never rolled randomly: not in shop polls, zero weight in edition pools
+    -- (only granted deliberately — Conceptual Deck, Entity, or the enforcement hooks)
+    in_shop = false,
+    weight = 0,
     extra_cost = 1,
     apply_to_float = false
 })

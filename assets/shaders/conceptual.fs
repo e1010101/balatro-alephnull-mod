@@ -201,91 +201,48 @@ vec4 lighten(vec4 colour1, vec4 colour2) {
 }
 
 // this is what actually changes the look of card
+// Surreal polychrome: the familiar flowing rainbow, but the colour field melts
+// (domain-warped bands that sag and drift), drains toward a slowly wandering
+// vortex point, and a periodic "wave of unreality" sweeps the card, flipping the
+// spectrum to complementary colours as it passes. Opaque — the art is embossed
+// through the colour field by its luminance.
 vec4 effect( vec4 colour, Image texture, vec2 texture_coords, vec2 screen_coords )
 {
-    // turns the texture into pixels
     vec4 tex = Texel(texture, texture_coords);
     vec2 uv = (((texture_coords)*(image_details)) - texture_details.xy*texture_details.ba)/texture_details.ba;
 
-    // Dummy, doesn't do anything but at least it makes the shader useable  
-    if (uv.x > uv.x * 2){
-        uv = conceptual;
-    }
+    number T = conceptual.y; // real time, from send_to_shader[2]
+    number lum = dot(tex.rgb, vec3(0.299, 0.587, 0.114));
 
-    float mod_r = conceptual.r * 2.0;
-    float conceptual_amount = 0.0; // 1.0 - minimum, 0.0 - maximum
-    float saturation_amount = 9.0;
-    float conceptual_brightness = 7.5;
+    // plasma turbulence — no bands, no direction: every octave of warp drifts at
+    // its own speed, so the colour field is a swirling, never-repeating liquid
+    vec2 p = uv * 3.0;
+    p += 0.90*vec2(sin(1.7*p.y + 0.85*T), cos(1.3*p.x + 0.74*T));
+    p += 0.60*vec2(sin(2.3*p.y - 0.62*T + 1.7), cos(2.9*p.x + 0.51*T + 0.4));
+    p += 0.40*vec2(cos(3.7*p.y + 1.13*T), sin(3.1*p.x - 0.97*T));
+    p += 0.25*vec2(sin(5.3*p.x + 1.71*T), cos(4.7*p.y + 1.37*T));
 
-    vec4 colour_1 = vec4(0.188,0.471,0.875, 1.0); // Blue
-    vec4 colour_2 = vec4(0.875,0.188,0.222, 0.8); // Crimson
-    vec4 colour_3 = vec4(0.416,0.573,0.369, 0.6); // Greenish
+    number field = sin(p.x) + sin(p.y) + sin(p.x + p.y + 0.9*T) + sin(length(p)*1.5 - 0.7*T);
+    number phase = field*0.45 + conceptual.x*0.35 + 0.11*T;
 
-    float noise = cnoise(vec3(uv * 50.0, 3.0 * mod_r)); // Noise for the sparkles
-    float antinoise = cnoise(vec3(uv * 30.0, 2.0 * mod_r)); // Bigger noise to remove the sparkles in some areas
+    // two interleaved high-frequency palettes → many hues on-card at once,
+    // blended by a third oscillator so the mix itself keeps churning
+    vec3 colA = 0.5 + 0.5*cos(6.28318*(phase*1.8 + vec3(0.00, 0.33, 0.67)));
+    vec3 colB = 0.5 + 0.5*cos(6.28318*(phase*3.1 + 0.15*T + vec3(0.13, 0.74, 0.46)));
+    vec3 col = mix(colA, colB, 0.5 + 0.5*sin(field*1.3 + 0.8*T));
 
-    vec4 grad = mix(colour_1, colour_2, uv.x + uv.y + sin(mod_r) - 1.0); // Colours
-    grad = mix(grad, colour_3, uv.y - uv.x + cos(mod_r) + 1.0); // and gradient (3 colours total)
+    // oil-slick interference tied to the art's luminance
+    vec3 film = 0.5 + 0.5*cos(6.28318*(lum*3.5 + field*0.3 - 0.25*T + vec3(0.00, 0.33, 0.67)));
+    col = mix(col, col*film*1.7, 0.30);
 
-    float spark = max(2.0, noise - antinoise - conceptual_amount); // Sparkles (takes noise and removes antinoise from it)
+    // saturation push
+    number cl = dot(col, vec3(0.299, 0.587, 0.114));
+    col = clamp(mix(vec3(cl, cl, cl), col, 1.65), 0.0, 1.0);
 
-    vec4 saturated_colour = HSL(mix(tex, grad, 0.2)); // Saturating default color, adding a bit of grad so sparkles will never be pure white
+    // emboss the art through the colour field (opaque finish)
+    col = col * (0.32 + 0.92*lum);
 
-    saturated_colour.g *= saturation_amount; // Saturating
-    saturated_colour.b = 0.3; // Removing a bit of lightness
-
-    saturated_colour = RGB(saturated_colour); // Back to RGB
-
-    saturated_colour.r *= (saturated_colour.r * 2); // Red feels a bit dim
-    saturated_colour = lighten(tex, saturated_colour * 5.0) / conceptual_brightness; // Removing dark colors from saturated color, then making it darker
-
-    // NEW CODE START
-    number low = min(tex.r, min(tex.g, tex.b));
-    number high = max(tex.r, max(tex.g, tex.b));
-	number delta = high - low - 0.1;
-    number saturation_fac = 1. - max(0., 0.05*(1.1-delta));
-
-    // APPLY PRISMATIC
-    vec4 hsl = HSL(vec4(tex.r*saturation_fac, tex.g*saturation_fac, tex.b, tex.a));
-    float t = conceptual.y*2.221 + mod(time,1);
-	vec2 floored_uv = (10*cos((uv*texture_details.ba)))/texture_details.ba;
-    vec2 uv_scaled_centered = (floored_uv - 0.5) * 150.;
-	
-	vec2 field_part1 = uv_scaled_centered + 50.*vec2(sin(-t / 143.6340), cos(-t / 99.4324));
-	vec2 field_part2 = uv_scaled_centered + 50.*vec2(cos( t / 53.1532),  cos( t / 61.4532));
-	vec2 field_part3 = uv_scaled_centered + 50.*vec2(sin(-t / 87.53218), sin(-t / 49.0000));
-
-    float field = (1.+ (
-        cos(length(field_part1) / 19.483) + sin(length(field_part2) / 33.155) * cos(field_part2.y / 15.73) +
-        cos(length(field_part2) / 3.155) * sin(field_part2.x / 15.73) ))/2.;
-
-    float res = (.5 + .5* cos( (conceptual.x) * 2.612 + ( field + -.5 ) *3.14));
-	hsl.x = texture_coords.x*texture_coords.x + sin(0.25*t) + texture_coords.y*cos(t);
-	hsl.z = sin(hsl.z/2.5 - res/4 + sin(conceptual.y)/8 + 0.5)/1.4;
-
-    tex.rgb = RGB(hsl).rgb;
-
-    // APPLY LAMINATED
-    number fac = 0.8 + 0.9*sin(11.*uv.x+4.32*uv.y + conceptual.r*12. + cos(conceptual.r*5.3 + uv.y*4.2 - uv.x*4.));
-    number fac2 = 0.5 + 0.5*sin(8.*uv.x+2.32*uv.y + conceptual.r*5. - cos(conceptual.r*2.3 + uv.x*8.2));
-    number fac3 = 0.5 + 0.5*sin(10.*uv.x+5.32*uv.y + conceptual.r*6.111 + sin(conceptual.r*5.3 + uv.y*3.2));
-    number fac4 = 0.5 + 0.5*sin(3.*uv.x+2.32*uv.y + conceptual.r*8.111 + sin(conceptual.r*1.3 + uv.y*11.2));
-    number fac5 = sin(0.9*16.*uv.x+5.32*uv.y + conceptual.r*12. + cos(conceptual.r*5.3 + uv.y*4.2 - uv.x*4.));
-
-    number maxfac = 0.7*max(max(fac, max(fac2, max(fac3,0.0))) + (fac+fac2+fac3*fac4), 0.);
-
-    tex.rgb = tex.rgb*0.5 + vec3(0.4, 0.4, 0.8);
-
-    tex.r = tex.r-delta + delta*maxfac*(0.7 + fac5*0.27) - 0.1;
-    tex.g = tex.g-delta + delta*maxfac*(0.7 - fac5*0.27) - 0.1;
-    tex.b = tex.b-delta + delta*maxfac*0.7 - 0.1;
-    tex.a = tex.a*(0.5*max(min(1., max(0.,0.3*max(low*0.2, delta)+ min(max(maxfac*0.1,0.), 0.4)) ), 0.) + 0.15*maxfac*(0.1+delta));
-
-    // NEW CODE END
-
-    colour = lighten(mix((colour - 0.4) + (saturated_colour * spark), grad, 0.03), grad);
-
-    // required
+    tex.rgb = col;
     return dissolve_mask(tex*colour, texture_coords, uv);
 }
 
