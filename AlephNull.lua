@@ -158,21 +158,35 @@ end
 -- The Entity appears in every shop, guaranteed. Runs from the per-frame watchdog:
 -- if the shop joker row has no Entity (fresh shop, reroll, or just bought), one
 -- materializes. create_card with a forced key skips the normal shop pool entirely.
+local function cx_shop_has_entity()
+    for _, card in ipairs(G.shop_jokers.cards) do
+        if cx_is_entity_card(card) then
+            return true
+        end
+    end
+    return false
+end
+
 local function cx_ensure_entity_in_shop()
     if not (G and G.STATE == G.STATES.SHOP and G.shop_jokers and G.shop_jokers.cards) then
+        return
+    end
+    -- resuming a save restores the shop via a queued event; while the saved cards
+    -- (possibly including an Entity) are still pending in G.load_shop_jokers, the
+    -- area looks empty — judging it now is what duplicated the Entity on reload
+    if G.load_shop_jokers then
         return
     end
     if G.shop_jokers.cx_entity_pending then
         return
     end
-    for _, card in ipairs(G.shop_jokers.cards) do
-        if cx_is_entity_card(card) then
-            return
-        end
+    if cx_shop_has_entity() then
+        return
     end
     G.shop_jokers.cx_entity_pending = true
     G.E_MANAGER:add_event(Event({func = function()
-        if G.STATE == G.STATES.SHOP and G.shop_jokers then
+        if G.STATE == G.STATES.SHOP and G.shop_jokers and not G.load_shop_jokers
+            and not cx_shop_has_entity() then
             local card = create_card('Joker', G.shop_jokers, nil, nil, nil, nil, 'j_cx_entity')
             card:set_edition({cx_conceptual = true}, true, true)
             create_shop_card_ui(card, 'Joker', G.shop_jokers)
@@ -715,12 +729,10 @@ SMODS.DynaTextEffect {
 }
 
 -- fractal shatter on the Entity's card base, layered above the edition shader (order 20)
--- and below the floating sprite (order 60), then the JOKER-lettering layer drawn as a
--- 3-D extrusion: a soft engine shadow (same style as the soul sprite's), translucent
--- colour-cycling depth passes along the shadow-parallax direction, topped by a face
--- pass running the card back's psychedelic shader.
+-- and below the floating sprite (order 60), then the JOKER-lettering layer: one soft
+-- engine shadow (identical to the soul sprite's) under a floating face pass running
+-- the card back's psychedelic shader.
 SMODS.draw_ignore_keys.cx_letters = true
-local cx_letters_layer_colour = {0, 0, 0, 0.55}
 
 SMODS.DrawStep {
     key = 'cx_entity_base',
@@ -740,22 +752,9 @@ SMODS.DrawStep {
                 local step = 0.02 + 0.018*amp
                 local fx, fy = -1.2*step*nx, -1.2*step*ny
 
-                -- soft drop shadow, same engine treatment as the soul sprite;
+                -- single soft drop shadow, exactly the soul sprite's treatment;
                 -- the drop grows as the letters rise
                 letters:draw_shader('dissolve', 0, nil, nil, self.children.center, nil, nil, nil, 0.08 + 0.06*amp, nil, 0.6)
-
-                -- translucent colour-cycling depth layers (lighter than pure black
-                -- so they read as depth, not as a heavy shadow)
-                for i = 3, 1, -1 do
-                    local f = 0.35 + 0.10*(3 - i)
-                    local hue = 6.28318*(0.65*t + i*0.09)
-                    cx_letters_layer_colour[1] = f*(0.5 + 0.5*math.cos(hue))
-                    cx_letters_layer_colour[2] = f*(0.5 + 0.5*math.cos(hue + 2.094))
-                    cx_letters_layer_colour[3] = f*(0.5 + 0.5*math.cos(hue + 4.188))
-                    letters.drawing_colour = cx_letters_layer_colour
-                    letters:draw_shader('dissolve', nil, nil, nil, self.children.center, nil, nil, i*step*nx, i*step*ny)
-                end
-                letters.drawing_colour = nil
 
                 -- psychedelic face, floating toward the viewer
                 letters:draw_shader('cx_conceptual_back', nil, self.ARGS.send_to_shader, nil, self.children.center, 0.03*amp, nil, fx, fy)
