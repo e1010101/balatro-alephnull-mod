@@ -588,6 +588,17 @@ function Card:add_to_deck(...)
     return ret
 end
 
+-- the Entity is always free: enforced after every cost recalculation so edition
+-- extra_cost, discounts' minimum clamp, or other mods' pricing can't move it
+local card_set_cost_ref = Card.set_cost
+function Card:set_cost(...)
+    local ret = card_set_cost_ref(self, ...)
+    if cx_is_entity_card(self) then
+        self.cost = 0
+    end
+    return ret
+end
+
 local game_updateref = Game.update
 function Game:update(dt)
     game_updateref(self, dt)
@@ -912,7 +923,7 @@ SMODS.Joker {
     pos = { x = 0, y = 0 },
     set_card_type_badge = conceptual,
     no_doe = true,
-    cost = 1,
+    cost = 0,
     rarity = 1,
     unlocked = true,
     discovered = true,
