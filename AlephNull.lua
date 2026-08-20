@@ -169,6 +169,79 @@ local function cx_trip_wrap_bigmath()
     end
 end
 
+-- Attribution layer: logs WHICH effect delivered a negative amount, with the
+-- source card and full effect table. Wraps SMODS.calculate_individual_effect
+-- outermost (installed lazily from Game:update, after every mod has chained
+-- its own wrapper), so the untouched amount and effect are visible. Also logs
+-- when the global `mult` and SMODS.Scoring_Parameters.mult.current disagree —
+-- the x_mult delta branch silently assumes they are equal.
+local function cx_trip_card_info(c)
+    local ok, s = pcall(function()
+        if not c then return 'nil' end
+        if c.config and c.config.center then
+            local bits = {tostring(c.config.center.key or c.config.center.name or '?')}
+            if c.base and c.base.value then
+                bits[#bits + 1] = tostring(c.base.value) .. ' of ' .. tostring(c.base.suit)
+            end
+            if c.edition and c.edition.key then bits[#bits + 1] = 'ed:' .. tostring(c.edition.key) end
+            if c.seal then bits[#bits + 1] = 'seal:' .. tostring(c.seal) end
+            return table.concat(bits, ' ')
+        end
+        return tostring(c)
+    end)
+    return ok and s or '<card-repr-error>'
+end
+
+local function cx_trip_effect_info(effect)
+    local ok, s = pcall(function()
+        local bits, n = {}, 0
+        for k, v in pairs(effect) do
+            n = n + 1
+            if n > 15 then bits[#bits + 1] = '...'; break end
+            if type(v) == 'table' and v.config then
+                bits[#bits + 1] = tostring(k) .. '=<card ' .. cx_trip_card_info(v) .. '>'
+            elseif type(v) == 'table' and not (Big and Big.is and Big.is(v)) then
+                bits[#bits + 1] = tostring(k) .. '=<table>'
+            else
+                bits[#bits + 1] = tostring(k) .. '=' .. cx_trip_repr(v)
+            end
+        end
+        return table.concat(bits, ' | ')
+    end)
+    return ok and s or '<effect-repr-error>'
+end
+
+local cx_trip_scie_wrapped = false
+local function cx_trip_wrap_scie()
+    if cx_trip_scie_wrapped then return end
+    if not (SMODS and type(SMODS.calculate_individual_effect) == 'function') then return end
+    cx_trip_scie_wrapped = true
+    local scie_ref = SMODS.calculate_individual_effect
+    SMODS.calculate_individual_effect = function(effect, scored_card, key, amount, from_edition, ...)
+        if CX_TRIP.enabled then
+            if cx_trip_is_negative(amount) then
+                cx_trip_log('scie_negative_amount[' .. tostring(key) .. ']', function()
+                    return 'amount=' .. cx_trip_repr(amount)
+                        .. ' | scored_card=' .. cx_trip_card_info(scored_card)
+                        .. ' | effect: ' .. cx_trip_effect_info(effect)
+                end)
+            end
+            if SMODS.Scoring_Parameters and SMODS.Scoring_Parameters.mult then
+                local cur = SMODS.Scoring_Parameters.mult.current
+                local ok, differ = pcall(function() return to_big(mult or 0) ~= to_big(cur or 0) end)
+                if ok and differ then
+                    cx_trip_log('mult_desync[' .. tostring(key) .. ']', function()
+                        return 'global_mult=' .. cx_trip_repr(mult) .. ' param_current=' .. cx_trip_repr(cur)
+                            .. ' amount=' .. cx_trip_repr(amount)
+                            .. ' | scored_card=' .. cx_trip_card_info(scored_card)
+                    end)
+                end
+            end
+        end
+        return scie_ref(effect, scored_card, key, amount, from_edition, ...)
+    end
+end
+
 -- Outermost wrap over mod_mult/mod_chips: sees the raw value before Cryptid's
 -- Lemon Trophy cap (and any other mod's wrapper) touches it. Installed lazily
 -- from the first Game:update so it lands after every mod has chained its own.
@@ -953,6 +1026,7 @@ local game_updateref = Game.update
 function Game:update(dt)
     game_updateref(self, dt)
     cx_trip_wrap_mods()
+    cx_trip_wrap_scie()
     CX_ALEPH_WATCHDOG('game_update_hook')
     if G.ARGS.LOC_COLOURS then
         if not self.C.color_rgb then
