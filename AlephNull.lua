@@ -624,6 +624,20 @@ local function cx_enforce_conceptual_editions()
     end
 end
 
+-- The Entity is never eternal: its destroy/dissolve immunity hooks make the
+-- sticker redundant, and it must stay sellable (selling pays out, the Entity
+-- remains). Clears stickers written by older versions' saves or other mods.
+local function cx_strip_entity_eternal()
+    if not (G and G.jokers and G.jokers.cards) then
+        return
+    end
+    for _, joker in ipairs(G.jokers.cards) do
+        if cx_is_entity_card(joker) and joker.ability and joker.ability.eternal then
+            joker.ability.eternal = nil
+        end
+    end
+end
+
 -- The Entity appears in every shop, guaranteed. Runs from the per-frame watchdog:
 -- if the shop joker row has no Entity (fresh shop, reroll, or just bought), one
 -- materializes. create_card with a forced key skips the normal shop pool entirely.
@@ -873,6 +887,7 @@ CX_ALEPH_WATCHDOG = function(reason)
     cx_wrap_talisman_effects()
     cx_heal_nan_state()
     cx_enforce_conceptual_editions()
+    cx_strip_entity_eternal()
     cx_ensure_entity_in_shop()
     if cx_aleph_active() then
         cx_set_aleph_scoring()
@@ -1038,7 +1053,6 @@ local card_destroy_ref = Card.destroy
 function Card:destroy(dissolve_colours, silent, dissolve_time_fac, no_juice)
     if cx_is_entity_card(self) then
         self.true_dissolve = nil
-        self.ability.eternal = true
         self:set_edition({cx_conceptual = true}, true)
         card_status_text(self, 'Immune', nil, 0.05*self.T.h, G.C.RED, nil, 0.6, nil, nil, 'bm', 'cancel')
         if not self.added_to_deck then
@@ -1060,7 +1074,7 @@ function Card:add_to_deck(...)
     local ret = card_add_to_deck_ref(self, ...)
     if cx_is_entity_card(self) then
         cx_mark_aleph_active('entity_added')
-        self:set_eternal(true)
+        self.ability.eternal = nil
         self:set_edition({cx_conceptual = true}, true)
         self.ability.extra_value = 1e100
         self:set_cost()
@@ -1413,7 +1427,7 @@ SMODS.Joker {
     unlocked = true,
     discovered = true,
     blueprint_compat = true,
-    eternal_compat = true,
+    eternal_compat = false,
     perishable_compat = false,
     immutable = true,
     immune_to_vermillion = true,
@@ -1430,7 +1444,6 @@ SMODS.Joker {
         if G.GAME.blind and G.GAME.blind.name ~= '' then
             G.GAME.blind.triggered = true
             G.GAME.blind.disabled = true
-            card:set_eternal(true)
             card:set_edition({cx_conceptual = true}, true)
             
             if not context.blueprint_card and cx_njr(context) and context.setting_blind then
