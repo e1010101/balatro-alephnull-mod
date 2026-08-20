@@ -279,13 +279,54 @@ local function cx_trip_wrap_mods()
     end
 end
 
+-- Root-cause fix for negative score corruption: SMODS's scoring-parameter
+-- sync (scoring_calculation.toml patches mod_mult/mod_chips) applies the new
+-- value as a DELTA through modify's skip path: current = mult + (_mult - mult).
+-- With Amulet bigs past ~1e308 the double caches read inf and add/sub fall
+-- into log-domain approximations, so the round-trip returns garbage —
+-- including sign-flipped values — straight into Scoring_Parameters, bypassing
+-- every guard hung on mod_mult. Wrapping outermost and re-syncing ABSOLUTELY
+-- makes the delta arithmetic irrelevant: whatever the inner sync computed,
+-- current ends up exactly the value mod_mult returned. Installed lazily from
+-- Game:update so it wraps every other mod's chained mod_mult/mod_chips.
+local cx_fix_param_sync_installed = false
+local function cx_fix_scoring_param_sync()
+    if cx_fix_param_sync_installed then return end
+    if not (SMODS and SMODS.Scoring_Parameters
+        and type(mod_mult) == 'function' and type(mod_chips) == 'function') then
+        return
+    end
+    cx_fix_param_sync_installed = true
+    local mm_ref, mc_ref = mod_mult, mod_chips
+    function mod_mult(v)
+        local r = mm_ref(v)
+        local p = SMODS.Scoring_Parameters and SMODS.Scoring_Parameters.mult
+        if p and p.current ~= r then
+            p.current = r
+            update_hand_text({delay = 0}, {mult = r})
+        end
+        return r
+    end
+    function mod_chips(v)
+        local r = mc_ref(v)
+        local p = SMODS.Scoring_Parameters and SMODS.Scoring_Parameters.chips
+        if p and p.current ~= r then
+            p.current = r
+            update_hand_text({delay = 0}, {chips = r})
+        end
+        return r
+    end
+end
+
 -- Amulet's OmegaNum intentionally returns NaN for negative-base fractional
 -- powers and negative arrow operands (frostice482/amulet#19, closed
 -- not_planned) — a NaN score reads as 0/unbeatable and ruins runs, which
--- Talisman never did. Repair locally: pow extends as an odd function for
--- negative bases (-2^1.2 -> -(2^1.2)); arrow clamps negative operands to 0;
--- anything still NaN becomes 0 instead of poisoning the run. Only fires when
--- the original op produced NaN, so all normal math is untouched.
+-- Talisman never did. Repair locally: pow on a negative base yields |base|^exp
+-- (negative scoring values are corrupt state here — see the scoring-param sync
+-- fix above — so the sign is sanitized rather than preserved); arrow clamps
+-- negative operands to 0; anything still NaN becomes 0 instead of poisoning
+-- the run. Only fires when the original op produced NaN, so all normal math
+-- is untouched.
 local function cx_repair_nan_ops()
     if not (Big and Big.pow and Big.arrow and Big.abs and Big.neg and to_big) then
         return
@@ -301,7 +342,7 @@ local function cx_repair_nan_ops()
                 return 'self=' .. cx_trip_repr(self) .. ' other=' .. cx_trip_repr(other)
             end)
             local ok, repaired = pcall(function()
-                return pow_ref(self:abs(), other):neg()
+                return pow_ref(self:abs(), other)
             end)
             if ok and repaired and not cx_big_is_bad(repaired) then
                 return repaired
@@ -322,7 +363,7 @@ local function cx_repair_nan_ops()
                     return 'a=' .. cx_trip_repr(a) .. ' b=' .. cx_trip_repr(b)
                 end)
                 local ok, repaired = pcall(function()
-                    return pow_mm_ref(to_big(a):abs(), b):neg()
+                    return pow_mm_ref(to_big(a):abs(), b)
                 end)
                 if ok and repaired and not cx_big_is_bad(repaired) then
                     return repaired
@@ -518,8 +559,26 @@ end
 
 local function cx_heal_nan_state()
     if not (G and G.GAME) then return end
+    -- A negative run score is corrupt state — no legitimate path produces one.
+    -- Log for attribution, then clamp the score (and Jen's per-frame fallback
+    -- copy, which would otherwise faithfully restore the corruption) to 0.
     if G.GAME.chips ~= nil and cx_trip_is_negative(G.GAME.chips) then
-        cx_trip_log('game_chips_negative', function() return cx_trip_repr(G.GAME.chips) end)
+        cx_trip_log('game_chips_negative_healed', function() return cx_trip_repr(G.GAME.chips) end)
+        G.GAME.chips = to_big and to_big(0) or 0
+        if G.GAME.chips_fallback ~= nil then
+            G.GAME.chips_fallback = G.GAME.chips
+        end
+    end
+    if SMODS and SMODS.Scoring_Parameters then
+        for _, pk in ipairs({'mult', 'chips'}) do
+            local p = SMODS.Scoring_Parameters[pk]
+            if p and p.current ~= nil and cx_trip_is_negative(p.current) then
+                cx_trip_log('param_' .. pk .. '_negative_healed', function()
+                    return cx_trip_repr(p.current)
+                end)
+                p.current = to_big and to_big(0) or 0
+            end
+        end
     end
     cx_heal_number(G.GAME, 'dollars')
     cx_heal_number(G.GAME, 'chips')
@@ -1025,6 +1084,7 @@ end
 local game_updateref = Game.update
 function Game:update(dt)
     game_updateref(self, dt)
+    cx_fix_scoring_param_sync()
     cx_trip_wrap_mods()
     cx_trip_wrap_scie()
     CX_ALEPH_WATCHDOG('game_update_hook')
