@@ -123,8 +123,60 @@ local function cx_repair_nan_ops()
         end
         return result
     end
+
+    -- Amulet's ee-tier effects call tetrate directly, bypassing arrow
+    if Big.tetrate then
+        local tetrate_ref = Big.tetrate
+        function Big:tetrate(other, ...)
+            local result = tetrate_ref(self, other, ...)
+            if cx_big_is_bad(result) then
+                local ok, repaired = pcall(function()
+                    return tetrate_ref(self:max(to_big(0)), to_big(other):max(to_big(0)))
+                end)
+                if ok and repaired and not cx_big_is_bad(repaired) then
+                    return repaired
+                end
+                return to_big(0)
+            end
+            return result
+        end
+    end
 end
 cx_repair_nan_ops()
+
+-- Deepest layer of NaN defence: Amulet applies X/^/^^/^^^ chips+mult effects
+-- through Talisman.effects.list[*].set (talisman/effects.lua). The ^ tier uses
+-- the raw `c ^ a` operator — with a plain Lua number that's native pow and no
+-- metamethod wrap can see it (the Supercharged Card path). Wrapping set() at
+-- this boundary catches every NaN regardless of which math produced it: the
+-- effect is skipped and the previous value kept, instead of poisoning the hand.
+local function cx_wrap_talisman_effects()
+    if not (Talisman and Talisman.effects and Talisman.effects.list) then
+        return
+    end
+    if Talisman.effects.cx_nan_wrapped then
+        return
+    end
+    Talisman.effects.cx_nan_wrapped = true
+    local seen = {}
+    for _, fx in pairs(Talisman.effects.list) do
+        if type(fx) == 'table' and type(fx.set) == 'function' and not seen[fx] then
+            seen[fx] = true
+            local set_ref = fx.set
+            fx.set = function(current, amount)
+                local ok, result = pcall(set_ref, current, amount)
+                if ok and result ~= nil and not cx_big_is_bad(result) then
+                    return result
+                end
+                if not cx_big_is_bad(current) then
+                    return current
+                end
+                return to_big and to_big(0) or 0
+            end
+        end
+    end
+end
+cx_wrap_talisman_effects()
 
 local function cx_njr(context)
     if jl and jl.njr then
@@ -476,6 +528,7 @@ end
 
 CX_ALEPH_WATCHDOG = function(reason)
     cx_repair_nan_ops()
+    cx_wrap_talisman_effects()
     cx_enforce_conceptual_editions()
     cx_ensure_entity_in_shop()
     if cx_aleph_active() then
