@@ -51,6 +51,16 @@ local function cx_big_gte(left, right)
     return (left or 0) >= (right or 0)
 end
 
+-- NaN/garbage detector for plain numbers and OmegaNum Bigs
+local function cx_big_is_bad(value)
+    if value == nil then return true end
+    local ok, bad = pcall(function()
+        local n = (Big and Big.is and Big.is(value)) and value.number or value
+        return type(n) == 'number' and n ~= n
+    end)
+    return (not ok) or bad
+end
+
 local function cx_njr(context)
     if jl and jl.njr then
         return jl.njr(context)
@@ -298,9 +308,9 @@ local function cx_score_floor()
         end
         return cx_to_big(base):arrow(ALEPH_OPERATOR, 2)
     end)
-    if ok and overkill then
+    if ok and overkill and not cx_big_is_bad(overkill) then
         local overkill_ok, already_overkill = pcall(cx_big_gte, G.GAME.chips, overkill)
-        if not overkill_ok or not already_overkill then
+        if not overkill_ok or not already_overkill or cx_big_is_bad(G.GAME.chips) then
             G.GAME.chips = overkill
         end
     else
@@ -432,16 +442,26 @@ if SMODS and SMODS.Scoring_Calculation then
     SMODS.Scoring_Calculation {
         key = 'aleph_null',
         func = function(self, chips, mult, flames)
+            -- OmegaNum's arrow() returns NaN for negative operands, and a NaN
+            -- score reads as 0 and fails the hand — clamp degenerate inputs
+            -- (negative/zero/NaN chips or mult from debuffs and other mods)
+            -- so the hand always scores something sane
+            local safe_chips = cx_to_big(chips)
+            local safe_mult = cx_to_big(mult)
+            local ok_c, bad_c = pcall(cx_big_gte, 0, safe_chips)
+            if not ok_c or bad_c or cx_big_is_bad(safe_chips) then safe_chips = cx_to_big(2) end
+            local ok_m, bad_m = pcall(cx_big_gte, 0, safe_mult)
+            if not ok_m or bad_m or cx_big_is_bad(safe_mult) then safe_mult = cx_to_big(2) end
             local ok, value = pcall(function()
-                return cx_to_big(chips):arrow(ALEPH_OPERATOR, cx_to_big(mult))
+                return safe_chips:arrow(ALEPH_OPERATOR, safe_mult)
             end)
-            if ok and value then
+            if ok and value and not cx_big_is_bad(value) then
                 return value
             end
             local exp_ok, exp_value = pcall(function()
-                return cx_to_big(chips) ^ cx_to_big(mult)
+                return safe_chips ^ safe_mult
             end)
-            if exp_ok and exp_value then
+            if exp_ok and exp_value and not cx_big_is_bad(exp_value) then
                 return exp_value
             end
             return math.huge
