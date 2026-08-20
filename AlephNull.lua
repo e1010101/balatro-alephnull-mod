@@ -257,6 +257,38 @@ function Card:set_edition(edition, immediate, silent, delay)
     return card_set_edition_ref(self, edition, immediate, silent, delay)
 end
 
+-- Last line of NaN defence: per-frame janitor over persistent game numbers.
+-- Whatever unwrapped math path mints a NaN, it gets repaired within a frame
+-- instead of festering in the run (and its save). Only touches keys that
+-- exist and are NaN — never invents values.
+local function cx_heal_number(container, key)
+    local v = container and container[key]
+    if v ~= nil and cx_big_is_bad(v) then
+        container[key] = to_big and to_big(0) or 0
+    end
+end
+
+local function cx_heal_nan_state()
+    if not (G and G.GAME) then return end
+    cx_heal_number(G.GAME, 'dollars')
+    cx_heal_number(G.GAME, 'chips')
+    cx_heal_number(G.GAME.blind, 'chips')
+    cx_heal_number(G.GAME.current_round, 'dollars')
+    if G.jokers and G.jokers.cards then
+        for _, card in ipairs(G.jokers.cards) do
+            local a = card.ability
+            if a then
+                cx_heal_number(a, 'mult')
+                cx_heal_number(a, 'x_mult')
+                cx_heal_number(a, 'x_chips')
+                cx_heal_number(a, 't_mult')
+                cx_heal_number(a, 't_chips')
+                cx_heal_number(a, 'extra_value')
+            end
+        end
+    end
+end
+
 local function cx_area_keeps_cards_hidden(area)
     local area_type = area and area.config and area.config.type
     return not area_type or area_type == 'deck' or area_type == 'discard'
@@ -529,6 +561,7 @@ end
 CX_ALEPH_WATCHDOG = function(reason)
     cx_repair_nan_ops()
     cx_wrap_talisman_effects()
+    cx_heal_nan_state()
     cx_enforce_conceptual_editions()
     cx_ensure_entity_in_shop()
     if cx_aleph_active() then
