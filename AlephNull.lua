@@ -61,6 +61,71 @@ local function cx_big_is_bad(value)
     return (not ok) or bad
 end
 
+-- Amulet's OmegaNum intentionally returns NaN for negative-base fractional
+-- powers and negative arrow operands (frostice482/amulet#19, closed
+-- not_planned) — a NaN score reads as 0/unbeatable and ruins runs, which
+-- Talisman never did. Repair locally: pow extends as an odd function for
+-- negative bases (-2^1.2 -> -(2^1.2)); arrow clamps negative operands to 0;
+-- anything still NaN becomes 0 instead of poisoning the run. Only fires when
+-- the original op produced NaN, so all normal math is untouched.
+local function cx_repair_nan_ops()
+    if not (Big and Big.pow and Big.arrow and Big.abs and Big.neg and to_big) then
+        return
+    end
+    if Big.cx_nan_repaired then return end
+    Big.cx_nan_repaired = true
+
+    local pow_ref = Big.pow
+    function Big:pow(other)
+        local result = pow_ref(self, other)
+        if cx_big_is_bad(result) then
+            local ok, repaired = pcall(function()
+                return pow_ref(self:abs(), other):neg()
+            end)
+            if ok and repaired and not cx_big_is_bad(repaired) then
+                return repaired
+            end
+            return to_big(0)
+        end
+        return result
+    end
+
+    -- the ^ operator captured the original pow at load time; wrap it separately
+    local mt = getmetatable(to_big(1))
+    if mt and mt.__pow then
+        local pow_mm_ref = mt.__pow
+        mt.__pow = function(a, b)
+            local result = pow_mm_ref(a, b)
+            if cx_big_is_bad(result) then
+                local ok, repaired = pcall(function()
+                    return pow_mm_ref(to_big(a):abs(), b):neg()
+                end)
+                if ok and repaired and not cx_big_is_bad(repaired) then
+                    return repaired
+                end
+                return to_big(0)
+            end
+            return result
+        end
+    end
+
+    local arrow_ref = Big.arrow
+    function Big:arrow(arrows, other)
+        local result = arrow_ref(self, arrows, other)
+        if cx_big_is_bad(result) then
+            local ok, repaired = pcall(function()
+                return arrow_ref(self:max(to_big(0)), arrows, to_big(other):max(to_big(0)))
+            end)
+            if ok and repaired and not cx_big_is_bad(repaired) then
+                return repaired
+            end
+            return to_big(0)
+        end
+        return result
+    end
+end
+cx_repair_nan_ops()
+
 local function cx_njr(context)
     if jl and jl.njr then
         return jl.njr(context)
@@ -410,6 +475,7 @@ local function cx_force_blind_win(reason, force_event)
 end
 
 CX_ALEPH_WATCHDOG = function(reason)
+    cx_repair_nan_ops()
     cx_enforce_conceptual_editions()
     cx_ensure_entity_in_shop()
     if cx_aleph_active() then
