@@ -956,6 +956,10 @@ SMODS.Joker {
     atlas = 'entity_float',
     soul_pos = { x = 1, y = 0, draw = cx_entity_soul_draw },
     calculate = function(self, card, context)
+        -- only an OWNED Entity may trigger the takeover: a shop-resident Entity
+        -- being evaluated by some mod context must not flip a normal run into
+        -- Aleph mode
+        if not card.added_to_deck then return end
         cx_mark_aleph_active('entity_calculate')
         cx_set_aleph_scoring()
         if G.GAME.blind and G.GAME.blind.name ~= '' then
