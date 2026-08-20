@@ -61,6 +61,151 @@ local function cx_big_is_bad(value)
     return (not ok) or bad
 end
 
+-- Sign tripwire (temporary diagnostic): observe-only logging to pinpoint where
+-- a score value first turns negative. Logs the first few events per tag with
+-- operands and a stack trace to <save dir>/alephnull_tripwire.log, then counts
+-- silently. Never alters values, never raises: every log path is pcall-guarded
+-- and self-disables on filesystem failure. Remove once the root cause is known.
+local CX_TRIP = {enabled = true, total = 0, TOTAL_MAX = 600, tags = {}, TAG_FULL = 6, busy = false}
+
+local function cx_trip_repr(v)
+    local ok, s = pcall(function()
+        if type(v) == 'number' then return string.format('%.17g', v) end
+        if Big and Big.is and Big.is(v) then
+            return string.format('Big(sign=%s number=%s "%s")',
+                tostring(v.sign), tostring(v.number), tostring(v))
+        end
+        return type(v) .. '(' .. tostring(v) .. ')'
+    end)
+    return ok and s or '<repr-error>'
+end
+
+local function cx_trip_is_negative(v)
+    local ok, neg = pcall(function()
+        if type(v) == 'number' then return v < 0 end
+        if Big and Big.is and Big.is(v) then
+            if v.sign and v.sign < 0 then return true end
+            local n = v.number
+            return type(n) == 'number' and n < 0
+        end
+        return false
+    end)
+    return ok and neg
+end
+
+local function cx_trip_log(tag, detail)
+    if not CX_TRIP.enabled then return end
+    local t = CX_TRIP.tags[tag]
+    if not t then t = {n = 0}; CX_TRIP.tags[tag] = t end
+    t.n = t.n + 1
+    if CX_TRIP.total >= CX_TRIP.TOTAL_MAX then return end
+    local full = t.n <= CX_TRIP.TAG_FULL
+    if not full and t.n % 200 ~= 0 then return end
+    CX_TRIP.total = CX_TRIP.total + 1
+    local ok = pcall(function()
+        local round = (G and G.GAME and G.GAME.round) and tostring(G.GAME.round) or '?'
+        local blind = (G and G.GAME and G.GAME.blind and G.GAME.blind.name) and G.GAME.blind.name or '?'
+        local body
+        if full then
+            local d = type(detail) == 'function' and detail() or tostring(detail)
+            body = d .. '\n' .. debug.traceback('', 3) .. '\n----\n'
+        else
+            body = 'suppressed, seen x' .. t.n .. '\n'
+        end
+        love.filesystem.append('alephnull_tripwire.log', string.format(
+            '[%s] round=%s blind=%s | %s | %s', os.date('%H:%M:%S'), round, blind, tag, body))
+    end)
+    if not ok then CX_TRIP.enabled = false end
+end
+
+pcall(function()
+    love.filesystem.append('alephnull_tripwire.log', string.format(
+        '\n==== AlephNull sign tripwire armed | %s ====\n', os.date('%Y-%m-%d %H:%M:%S')))
+end)
+
+-- Detects arithmetic that MANUFACTURES a negative from non-negative operands
+-- (a legitimate `small - big` is not logged). Wraps the Big methods and the
+-- operator metamethods, pass-through in all cases.
+local function cx_trip_wrap_bigmath()
+    if not (Big and Big.add and Big.sub and Big.mul and to_big) then return end
+    if Big.cx_trip_mathwrapped then return end
+    Big.cx_trip_mathwrapped = true
+
+    local function made_negative(a, b, r)
+        return cx_trip_is_negative(r) and not cx_trip_is_negative(a) and not cx_trip_is_negative(b)
+    end
+    local function sub_illegit(a, b, r)
+        if not made_negative(a, b, r) then return false end
+        local ok, b_bigger = pcall(function() return to_big(b) > to_big(a) end)
+        return ok and not b_bigger
+    end
+
+    local function wrap2(tag, orig, check)
+        return function(a, b)
+            local r = orig(a, b)
+            if CX_TRIP.enabled and not CX_TRIP.busy then
+                CX_TRIP.busy = true
+                pcall(function()
+                    if check(a, b, r) then
+                        cx_trip_log(tag, function()
+                            return 'a=' .. cx_trip_repr(a) .. ' b=' .. cx_trip_repr(b) .. ' r=' .. cx_trip_repr(r)
+                        end)
+                    end
+                end)
+                CX_TRIP.busy = false
+            end
+            return r
+        end
+    end
+
+    Big.add = wrap2('big_add_sign_bug', Big.add, made_negative)
+    Big.sub = wrap2('big_sub_sign_bug', Big.sub, sub_illegit)
+    Big.mul = wrap2('big_mul_sign_bug', Big.mul, made_negative)
+    local mt = getmetatable(to_big(1))
+    if mt then
+        if mt.__add then mt.__add = wrap2('big_mm_add_sign_bug', mt.__add, made_negative) end
+        if mt.__sub then mt.__sub = wrap2('big_mm_sub_sign_bug', mt.__sub, sub_illegit) end
+        if mt.__mul then mt.__mul = wrap2('big_mm_mul_sign_bug', mt.__mul, made_negative) end
+    end
+end
+
+-- Outermost wrap over mod_mult/mod_chips: sees the raw value before Cryptid's
+-- Lemon Trophy cap (and any other mod's wrapper) touches it. Installed lazily
+-- from the first Game:update so it lands after every mod has chained its own.
+local cx_trip_mods_wrapped = false
+local function cx_trip_wrap_mods()
+    if cx_trip_mods_wrapped then return end
+    if type(mod_mult) ~= 'function' or type(mod_chips) ~= 'function' then return end
+    cx_trip_mods_wrapped = true
+    local mm_ref, mc_ref = mod_mult, mod_chips
+    function mod_mult(v)
+        local neg_in = cx_trip_is_negative(v)
+        if neg_in then
+            cx_trip_log('mod_mult_negative_in', function() return cx_trip_repr(v) end)
+        end
+        local r = mm_ref(v)
+        if not neg_in and cx_trip_is_negative(r) then
+            cx_trip_log('mod_mult_made_negative', function()
+                return 'in=' .. cx_trip_repr(v) .. ' out=' .. cx_trip_repr(r)
+            end)
+        end
+        return r
+    end
+    function mod_chips(v)
+        local neg_in = cx_trip_is_negative(v)
+        if neg_in then
+            cx_trip_log('mod_chips_negative_in', function() return cx_trip_repr(v) end)
+        end
+        local r = mc_ref(v)
+        if not neg_in and cx_trip_is_negative(r) then
+            cx_trip_log('mod_chips_made_negative', function()
+                return 'in=' .. cx_trip_repr(v) .. ' out=' .. cx_trip_repr(r)
+            end)
+        end
+        return r
+    end
+end
+
 -- Amulet's OmegaNum intentionally returns NaN for negative-base fractional
 -- powers and negative arrow operands (frostice482/amulet#19, closed
 -- not_planned) — a NaN score reads as 0/unbeatable and ruins runs, which
@@ -79,6 +224,9 @@ local function cx_repair_nan_ops()
     function Big:pow(other)
         local result = pow_ref(self, other)
         if cx_big_is_bad(result) then
+            cx_trip_log('big_pow_nan_repair', function()
+                return 'self=' .. cx_trip_repr(self) .. ' other=' .. cx_trip_repr(other)
+            end)
             local ok, repaired = pcall(function()
                 return pow_ref(self:abs(), other):neg()
             end)
@@ -97,6 +245,9 @@ local function cx_repair_nan_ops()
         mt.__pow = function(a, b)
             local result = pow_mm_ref(a, b)
             if cx_big_is_bad(result) then
+                cx_trip_log('big_pow_mm_nan_repair', function()
+                    return 'a=' .. cx_trip_repr(a) .. ' b=' .. cx_trip_repr(b)
+                end)
                 local ok, repaired = pcall(function()
                     return pow_mm_ref(to_big(a):abs(), b):neg()
                 end)
@@ -113,6 +264,9 @@ local function cx_repair_nan_ops()
     function Big:arrow(arrows, other)
         local result = arrow_ref(self, arrows, other)
         if cx_big_is_bad(result) then
+            cx_trip_log('big_arrow_nan_repair', function()
+                return 'self=' .. cx_trip_repr(self) .. ' arrows=' .. tostring(arrows) .. ' other=' .. cx_trip_repr(other)
+            end)
             local ok, repaired = pcall(function()
                 return arrow_ref(self:max(to_big(0)), arrows, to_big(other):max(to_big(0)))
             end)
@@ -130,6 +284,9 @@ local function cx_repair_nan_ops()
         function Big:tetrate(other, ...)
             local result = tetrate_ref(self, other, ...)
             if cx_big_is_bad(result) then
+                cx_trip_log('big_tetrate_nan_repair', function()
+                    return 'self=' .. cx_trip_repr(self) .. ' other=' .. cx_trip_repr(other)
+                end)
                 local ok, repaired = pcall(function()
                     return tetrate_ref(self:max(to_big(0)), to_big(other):max(to_big(0)))
                 end)
@@ -143,6 +300,7 @@ local function cx_repair_nan_ops()
     end
 end
 cx_repair_nan_ops()
+cx_trip_wrap_bigmath()
 
 -- Deepest layer of NaN defence: Amulet applies X/^/^^/^^^ chips+mult effects
 -- through Talisman.effects.list[*].set (talisman/effects.lua). The ^ tier uses
@@ -159,14 +317,31 @@ local function cx_wrap_talisman_effects()
     end
     Talisman.effects.cx_nan_wrapped = true
     local seen = {}
-    for _, fx in pairs(Talisman.effects.list) do
+    for fx_key, fx in pairs(Talisman.effects.list) do
         if type(fx) == 'table' and type(fx.set) == 'function' and not seen[fx] then
             seen[fx] = true
             local set_ref = fx.set
+            local tier = tostring(fx.key or fx_key)
             fx.set = function(current, amount)
                 local ok, result = pcall(set_ref, current, amount)
                 if ok and result ~= nil and not cx_big_is_bad(result) then
+                    if cx_trip_is_negative(result) and not cx_trip_is_negative(current) then
+                        cx_trip_log('fx_set_sign_flip[' .. tier .. ']', function()
+                            return 'current=' .. cx_trip_repr(current) .. ' amount=' .. cx_trip_repr(amount)
+                                .. ' result=' .. cx_trip_repr(result)
+                        end)
+                    end
                     return result
+                end
+                if not ok then
+                    cx_trip_log('fx_set_error[' .. tier .. ']', function()
+                        return tostring(result) .. ' | current=' .. cx_trip_repr(current)
+                            .. ' amount=' .. cx_trip_repr(amount)
+                    end)
+                else
+                    cx_trip_log('fx_set_nan_skip[' .. tier .. ']', function()
+                        return 'current=' .. cx_trip_repr(current) .. ' amount=' .. cx_trip_repr(amount)
+                    end)
                 end
                 if not cx_big_is_bad(current) then
                     return current
@@ -270,6 +445,9 @@ end
 
 local function cx_heal_nan_state()
     if not (G and G.GAME) then return end
+    if G.GAME.chips ~= nil and cx_trip_is_negative(G.GAME.chips) then
+        cx_trip_log('game_chips_negative', function() return cx_trip_repr(G.GAME.chips) end)
+    end
     cx_heal_number(G.GAME, 'dollars')
     cx_heal_number(G.GAME, 'chips')
     cx_heal_number(G.GAME.blind, 'chips')
@@ -774,6 +952,7 @@ end
 local game_updateref = Game.update
 function Game:update(dt)
     game_updateref(self, dt)
+    cx_trip_wrap_mods()
     CX_ALEPH_WATCHDOG('game_update_hook')
     if G.ARGS.LOC_COLOURS then
         if not self.C.color_rgb then
