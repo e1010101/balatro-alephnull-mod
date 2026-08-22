@@ -649,6 +649,16 @@ local function cx_heal_staple_jokers()
             if not (joker.edition and joker.edition.cx_conceptual) then
                 joker:set_edition({cx_conceptual = true}, true)
             end
+            -- canonical values: anything that slips past the modification
+            -- blocks (misprintize wraps) is healed within a frame. The type
+            -- check keeps the guard convergent if a big-number lib converted
+            -- the value (plain ~= Big compares true forever in Lua 5.1).
+            if joker.ability and (type(joker.ability.extra_value) ~= 'number'
+                or joker.ability.extra_value ~= 1e100) then
+                joker.ability.extra_value = 1e100
+                joker:set_cost()
+            end
+            joker.misprint_cost_fac = nil
         end
     end
 end
@@ -1117,6 +1127,33 @@ function Card:set_debuff(should_debuff)
 	end
 end
 
+-- Conceptual cards cannot have their values modified. Enforced here at the
+-- modifiers' own entry points rather than via their opt-out flags (Cryptid's
+-- `immutable` can even be skipped by its own callers through
+-- args.bypass_checks) — these wraps sit outermost, so they always win.
+local function cx_card_is_unmodifiable(card)
+    if not card then return false end
+    if card.edition and card.edition.cx_conceptual then return true end
+    return cx_is_entity_card(card) or cx_is_creator_card(card)
+end
+
+if Cryptid then
+    for _, fname in ipairs({'misprintize', 'manipulate'}) do
+        local modifier_ref = Cryptid[fname]
+        if type(modifier_ref) == 'function' then
+            Cryptid[fname] = function(card, ...)
+                if cx_card_is_unmodifiable(card) then
+                    if card and card.T then
+                        card_status_text(card, 'Immune', nil, 0.05*card.T.h, G.C.RED, nil, 0.6, nil, nil, 'bm', 'cancel')
+                    end
+                    return
+                end
+                return modifier_ref(card, ...)
+            end
+        end
+    end
+end
+
 local card_destroy_ref = Card.destroy
 function Card:destroy(dissolve_colours, silent, dissolve_time_fac, no_juice)
     if cx_is_entity_card(self) then
@@ -1525,7 +1562,6 @@ SMODS.Joker {
     blueprint_compat = true,
     eternal_compat = false,
     perishable_compat = false,
-    immutable = true,
     immune_to_vermillion = true,
     cx_entity = true,
     atlas = 'entity_float',
@@ -1557,7 +1593,7 @@ SMODS.Edition({
         name = "Conceptual",
         label = "Conceptual",
         text = {
-            '{C:color_rgb,E:1}Conceptual{} cards cannot be {C:attention}Debuffed{}, {C:attention}Flipped{} or {C:attention}Destroyed{}',
+            '{C:color_rgb,E:1}Conceptual{} cards cannot be {C:attention}Debuffed{}, {C:attention}Flipped{}, {C:attention}Destroyed{} or {C:attention}Modified{}',
             '{C:color_rgb,E:1}Conceptual{} cannot be removed or replaced by other {C:attention}Editions{}',
             '{C:attention}Selection Status{} of {C:color_rgb,E:1}Conceptual{} cards can only be affected by the player'
         }
@@ -2382,7 +2418,6 @@ SMODS.Joker {
     discovered = true,
     blueprint_compat = false,
     eternal_compat = false,
-    immutable = true,
     cx_creator = true
 }
 
