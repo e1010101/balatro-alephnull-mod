@@ -15,19 +15,21 @@ local conceptual = function(self, card, badges)
 		{n=G.UIT.R, config={align = "cm", colour = G.C.BLACK, r = 0.1, minw = 2, minh = 0.4*scaling, emboss = 0.05, padding = 0.03*scaling}, nodes={
 			{n=G.UIT.B, config={h=0.1,w=0.03}},
 			{n=G.UIT.O, config={object = DynaText({
-				string = {'Joker', 'Conceptual', 'Joker', '???'},
+				string = {'?????'},
 				colours = {G.C.color_rgb},
 				text_effect = 'cx_pop3d',
 				float = true,
 				rotate = true,
 				bump = true,
+				-- random positional jitter lives in cx_pop3d's draw_letter
+				-- (engine quiver is rotation-based and just wags the ? tails);
+				-- colour flicker comes from color_rgb re-rolling every frame
 				shadow = true,
-				offset_y = -0.05,
+				offset_y = 0,
 				silent = true,
-				spacing = 1,
+				spacing = 2,
 				pop_in_rate = 9,
-				pop_delay = 0.7,
-				scale = 0.33*scaling
+				scale = 0.35*scaling
 			})}},
 			{n=G.UIT.B, config={h=0.1,w=0.03}},
 		}}
@@ -501,6 +503,11 @@ local function cx_is_entity_card(card)
     return center and (center.cx_entity or center.key == 'j_cx_entity')
 end
 
+local function cx_is_creator_card(card)
+    local center = cx_center(card)
+    return center and (center.cx_creator or center.key == 'j_cx_creator')
+end
+
 local function cx_has_entity()
     if not (G and G.jokers and G.jokers.cards) then
         return false
@@ -540,7 +547,10 @@ end
 
 local card_set_edition_ref = Card.set_edition
 function Card:set_edition(edition, immediate, silent, delay)
-    if self.edition and self.edition.cx_conceptual and not cx_is_conceptual_edition(edition) then
+    -- cx_creator_preview: wizard preview/grid cards may cycle freely through
+    -- editions, including away from Conceptual — stickiness is for real cards
+    if self.edition and self.edition.cx_conceptual and not cx_is_conceptual_edition(edition)
+        and not self.cx_creator_preview then
         return
     end
     return card_set_edition_ref(self, edition, immediate, silent, delay)
@@ -624,30 +634,70 @@ local function cx_enforce_conceptual_editions()
     end
 end
 
--- The Entity is never eternal: its destroy/dissolve immunity hooks make the
--- sticker redundant, and it must stay sellable (selling pays out, the Entity
--- remains). Clears stickers written by older versions' saves or other mods.
-local function cx_strip_entity_eternal()
+-- Owned Entity/Creator upkeep: never eternal (they must stay sellable — the
+-- selling IS the money printer), always Conceptual. Also heals saves written
+-- before these rules existed and stickers/editions forced by other mods.
+local function cx_heal_staple_jokers()
     if not (G and G.jokers and G.jokers.cards) then
         return
     end
     for _, joker in ipairs(G.jokers.cards) do
-        if cx_is_entity_card(joker) and joker.ability and joker.ability.eternal then
-            joker.ability.eternal = nil
+        if cx_is_entity_card(joker) or cx_is_creator_card(joker) then
+            if joker.ability and joker.ability.eternal then
+                joker.ability.eternal = nil
+            end
+            if not (joker.edition and joker.edition.cx_conceptual) then
+                joker:set_edition({cx_conceptual = true}, true)
+            end
         end
     end
 end
 
--- The Entity appears in every shop, guaranteed. Runs from the per-frame watchdog:
--- if the shop joker row has no Entity (fresh shop, reroll, or just bought), one
--- materializes. create_card with a forced key skips the normal shop pool entirely.
--- true if the shop holds an Entity; also culls any extras beyond the first,
--- healing saves written before the resume-duplication fix
-local function cx_shop_has_entity()
+-- Guaranteed shop stock: these jokers appear in every shop. Runs from the
+-- per-frame watchdog: if the shop joker row is missing one (fresh shop, reroll,
+-- or just bought), it materializes. create_card with a forced key skips the
+-- normal shop pool entirely. Extras beyond the first of each are culled,
+-- healing saves written before the resume-duplication fix.
+local CX_SHOP_STAPLES = {
+    {key = 'j_cx_entity', is = cx_is_entity_card, pending = 'cx_entity_pending', conceptual = true},
+    {key = 'j_cx_creator', is = cx_is_creator_card, pending = 'cx_creator_pending', conceptual = true},
+}
+
+local function cx_is_staple_card(card)
+    for _, staple in ipairs(CX_SHOP_STAPLES) do
+        if staple.is(card) then return true end
+    end
+    return false
+end
+
+-- Staples never consume rollable shop slots: the lovely payloads in the three
+-- shop fill loops (Game:update_shop, change_shop_size, reroll_shop) count
+-- rollable jokers through this instead of #G.shop_jokers.cards, so the shop
+-- always rolls its full joker_max of normal stock with the staples on top.
+-- Global on purpose — lovely payloads can only reach globals.
+function CX_SHOP_ROLLABLE_COUNT()
+    if not (G and G.shop_jokers and G.shop_jokers.cards) then return 0 end
+    local n = 0
+    for _, card in ipairs(G.shop_jokers.cards) do
+        if not cx_is_staple_card(card) then n = n + 1 end
+    end
+    return n
+end
+
+function CX_SHOP_STAPLE_COUNT()
+    if not (G and G.shop_jokers and G.shop_jokers.cards) then return 0 end
+    local n = 0
+    for _, card in ipairs(G.shop_jokers.cards) do
+        if cx_is_staple_card(card) then n = n + 1 end
+    end
+    return n
+end
+
+local function cx_shop_has_staple(staple)
     local found = false
     local extras = nil
     for _, card in ipairs(G.shop_jokers.cards) do
-        if cx_is_entity_card(card) then
+        if staple.is(card) then
             if found then
                 extras = extras or {}
                 extras[#extras + 1] = card
@@ -664,35 +714,47 @@ local function cx_shop_has_entity()
     return found
 end
 
-local function cx_ensure_entity_in_shop()
+local function cx_ensure_staples_in_shop()
     if not (G and G.STATE == G.STATES.SHOP and G.shop_jokers and G.shop_jokers.cards) then
         return
     end
     -- resuming a save restores the shop via a queued event; while the saved cards
-    -- (possibly including an Entity) are still pending in G.load_shop_jokers, the
+    -- (possibly including a staple) are still pending in G.load_shop_jokers, the
     -- area looks empty — judging it now is what duplicated the Entity on reload
     if G.load_shop_jokers then
         return
     end
-    if G.shop_jokers.cx_entity_pending then
-        return
+    -- staples ride above the rollable slots; widen the area's card_limit so
+    -- the row lays out joker_max normals + staples without extra squeezing
+    if G.GAME.shop and G.GAME.shop.joker_max then
+        G.shop_jokers.config.card_limit = G.GAME.shop.joker_max + #CX_SHOP_STAPLES
     end
-    if cx_shop_has_entity() then
-        return
-    end
-    G.shop_jokers.cx_entity_pending = true
-    G.E_MANAGER:add_event(Event({func = function()
-        if G.STATE == G.STATES.SHOP and G.shop_jokers and not G.load_shop_jokers
-            and not cx_shop_has_entity() then
-            local card = create_card('Joker', G.shop_jokers, nil, nil, nil, nil, 'j_cx_entity')
-            card:set_edition({cx_conceptual = true}, true, true)
-            create_shop_card_ui(card, 'Joker', G.shop_jokers)
-            card:start_materialize()
-            G.shop_jokers:emplace(card)
+    -- per-frame price heal: whatever repricing path some mod takes (direct
+    -- set_cost_value calls, inflation ticks, ...), staples stay free
+    for _, card in ipairs(G.shop_jokers.cards) do
+        if cx_is_staple_card(card) and card.cost ~= 0 then
+            card.cost = 0
         end
-        if G.shop_jokers then G.shop_jokers.cx_entity_pending = nil end
-        return true
-    end}))
+    end
+    for _, staple in ipairs(CX_SHOP_STAPLES) do
+        if not G.shop_jokers[staple.pending] and not cx_shop_has_staple(staple) then
+            G.shop_jokers[staple.pending] = true
+            G.E_MANAGER:add_event(Event({func = function()
+                if G.STATE == G.STATES.SHOP and G.shop_jokers and not G.load_shop_jokers
+                    and not cx_shop_has_staple(staple) then
+                    local card = create_card('Joker', G.shop_jokers, nil, nil, nil, nil, staple.key)
+                    if staple.conceptual then
+                        card:set_edition({cx_conceptual = true}, true, true)
+                    end
+                    create_shop_card_ui(card, 'Joker', G.shop_jokers)
+                    card:start_materialize()
+                    G.shop_jokers:emplace(card)
+                end
+                if G.shop_jokers then G.shop_jokers[staple.pending] = nil end
+                return true
+            end}))
+        end
+    end
 end
 
 -- Conceptual cards can never be flipped face-down outside the deck/discard piles.
@@ -887,8 +949,8 @@ CX_ALEPH_WATCHDOG = function(reason)
     cx_wrap_talisman_effects()
     cx_heal_nan_state()
     cx_enforce_conceptual_editions()
-    cx_strip_entity_eternal()
-    cx_ensure_entity_in_shop()
+    cx_heal_staple_jokers()
+    cx_ensure_staples_in_shop()
     if cx_aleph_active() then
         cx_set_aleph_scoring()
         if cx_blind_ready() and G.STATE ~= G.STATES.SHOP then
@@ -1018,6 +1080,12 @@ function Card:start_dissolve(dissolve_colours, silent, dissolve_time_fac, no_jui
 			if self.ability.set == 'Joker' then G.jokers:emplace(self) else G.consumeables:emplace(self) end
 		end
 		return
+	elseif self.cx_sell_stay then
+		-- sale payout landed; only the sell flow's dissolve is suppressed, so
+		-- genuine destruction effects still work on this card
+		self.cx_sell_stay = nil
+		card_status_text(self, 'Immune', nil, 0.05*self.T.h, G.C.RED, nil, 0.6, nil, nil, 'bm', 'cancel')
+		return
 	elseif self.true_dissolve then
 		dissolve_ref(self, dissolve_colours, silent, dissolve_time_fac, no_juice)
 	else
@@ -1080,6 +1148,11 @@ function Card:add_to_deck(...)
         self:set_cost()
         cx_set_aleph_scoring()
         CX_ALEPH_WATCHDOG('entity_added')
+    elseif cx_is_creator_card(self) then
+        self.ability.eternal = nil
+        self:set_edition({cx_conceptual = true}, true)
+        self.ability.extra_value = 1e100
+        self:set_cost()
     end
     return ret
 end
@@ -1089,10 +1162,24 @@ end
 local card_set_cost_ref = Card.set_cost
 function Card:set_cost(...)
     local ret = card_set_cost_ref(self, ...)
-    if cx_is_entity_card(self) then
+    if cx_is_entity_card(self) or cx_is_creator_card(self) then
         self.cost = 0
     end
     return ret
+end
+
+-- Cryptid splits pricing into Card:set_cost_value (min-$1 clamp lives there)
+-- and callers can hit it directly, bypassing the set_cost wrapper above —
+-- that's how the Creator showed $1 in the shop. Wrap it too when it exists.
+local card_set_cost_value_ref = Card.set_cost_value
+if card_set_cost_value_ref then
+    function Card:set_cost_value(...)
+        local ret = card_set_cost_value_ref(self, ...)
+        if cx_is_entity_card(self) or cx_is_creator_card(self) then
+            self.cost = 0
+        end
+        return ret
+    end
 end
 
 local game_updateref = Game.update
@@ -1226,6 +1313,12 @@ SMODS.DynaTextEffect {
         local sc = real_pop_in*letter.scale*dt.scale*FS
         local ox, oy = 0.5*letter.dims.x/dt.scale, 0.5*letter.dims.y/dt.scale
         local t = G.TIMERS.REAL
+
+        -- per-frame random jitter: shifts the whole letter (extrusion stack
+        -- and face together) so glyphs shake bodily instead of rotating
+        local jmag = (G.SETTINGS.reduced_motion and 0 or 1)*0.9
+        bx = bx + (math.random() - 0.5)*2*jmag*norm.x
+        by = by + (math.random() - 0.5)*2*jmag*norm.y
         local alpha = (dt.colours[1] and dt.colours[1][4]) or 1
         local depth = 4
         local amp = 1.0 + 0.5*math.sin(2.1*t + k*0.65)
@@ -1262,23 +1355,26 @@ SMODS.DrawStep {
     key = 'cx_entity_base',
     order = 25,
     func = function(self)
-        if self.config.center.cx_entity and (self.config.center.discovered or self.bypass_discovery_center) then
-            self.children.center:draw_shader('cx_entity_fractal', nil, self.ARGS.send_to_shader)
+        if (self.config.center.cx_entity or self.config.center.cx_creator)
+            and (self.config.center.discovered or self.bypass_discovery_center) then
+            local t = G.TIMERS.REAL
+            local sp = self.shadow_parrallax
+            local mag = sp and math.sqrt(sp.x*sp.x + sp.y*sp.y) or 0
+            local nx = (mag > 0.0001) and sp.x/mag or 0
+            local ny = (mag > 0.0001) and sp.y/mag or -1
+            local amp = 0.5 + 0.5*math.sin(2.0*t)
+            local step = 0.02 + 0.018*amp
+            local fx, fy = -1.2*step*nx, -1.2*step*ny
+
+            -- entity: fractal shatter base; creator: hypnotic glitch base
+            self.children.center:draw_shader(
+                self.config.center.cx_creator and 'cx_creator_base' or 'cx_entity_fractal',
+                nil, self.ARGS.send_to_shader)
 
             local letters = self.children.cx_letters
             if letters then
-                local t = G.TIMERS.REAL
-                local sp = self.shadow_parrallax
-                local mag = sp and math.sqrt(sp.x*sp.x + sp.y*sp.y) or 0
-                local nx = (mag > 0.0001) and sp.x/mag or 0
-                local ny = (mag > 0.0001) and sp.y/mag or -1
-                local amp = 0.5 + 0.5*math.sin(2.0*t)
-                local step = 0.02 + 0.018*amp
-                local fx, fy = -1.2*step*nx, -1.2*step*ny
-
-                -- single soft drop shadow, exactly the soul sprite's treatment;
-                -- the drop grows as the letters rise
-                letters:draw_shader('dissolve', 0, nil, nil, self.children.center, nil, nil, nil, 0.08 + 0.06*amp, nil, 0.6)
+                -- no drop shadow (removed with the soul shadows — floating
+                -- glyphs read cleaner unanchored)
 
                 -- psychedelic face, floating toward the viewer
                 letters:draw_shader('cx_conceptual_back', nil, self.ARGS.send_to_shader, nil, self.children.center, 0.03*amp, nil, fx, fy)
@@ -1348,8 +1444,8 @@ SMODS.Atlas {
 local set_spritesref = Card.set_sprites
 function Card:set_sprites(_center, _front)
 	set_spritesref(self, _center, _front)
-	if _center and _center.cx_entity then
-		-- dedicated JOKER-lettering layer: frame {2,0} of the entity_float atlas
+	if _center and (_center.cx_entity or _center.cx_creator) then
+		-- dedicated JOKER-lettering layer: frame {2,0} of the float atlas
 		-- holds just the corner text, extracted from the base art
 		if self.children.cx_letters then self.children.cx_letters:remove() end
 		self.children.cx_letters = Sprite(
@@ -1546,6 +1642,544 @@ SMODS.Back{
             end
 		}))
 	end
+}
+
+-- THE CREATOR ------------------------------------------------------------
+-- A joker with an activated ability: a Create button on its highlight UI
+-- opens an overlay wizard (type select -> per-type composer) that conjures
+-- any card into the run, free and unlimited.
+
+-- same frame layout as entity_float: {0,0} card base (identical to the
+-- Entity's), {1,0} floating soul (pixel tesseract), {2,0} JOKER lettering
+SMODS.Atlas {
+    key = "creator_float",
+    path = "j_cx_creator_float.png",
+    px = 71,
+    py = 95
+}
+
+-- wizard state: draft lives here, never in G.GAME, so a save mid-wizard
+-- simply forgets the draft instead of writing UI state into the run
+local CX_CREATOR = {}
+
+-- cards in wizard screens render at this scale so the overlays fit the screen
+local CX_CREATOR_UI_SCALE = 0.75
+
+local function cx_creator_loc_misc(key, set)
+    local ok, res = pcall(localize, key, set)
+    if ok and type(res) == 'string' and res ~= 'ERROR LOC' then return res end
+    return key
+end
+
+local function cx_creator_loc_name(set, key)
+    local ok, res = pcall(function()
+        return localize{type = 'name_text', set = set, key = key}
+    end)
+    if ok and type(res) == 'string' and res ~= 'ERROR LOC' then return res end
+    return key
+end
+
+local function cx_creator_edition_keys()
+    local keys = {'none'}
+    for _, c in ipairs(G.P_CENTER_POOLS.Edition or {}) do
+        if c.key ~= 'e_base' then keys[#keys + 1] = c.key end
+    end
+    return keys
+end
+
+-- resolves an index into the editions list to a set_edition-ready key ('e_...')
+local function cx_creator_edition_for(idx)
+    local key = CX_CREATOR.editions and CX_CREATOR.editions[idx or 1]
+    if not key or key == 'none' then return nil end
+    return key
+end
+
+local function cx_creator_build_pools()
+    local d = CX_CREATOR
+    d.suits, d.ranks, d.enhancements, d.seals = {}, {}, {'none'}, {'none'}
+    for _, k in ipairs(SMODS.Suit.obj_buffer) do d.suits[#d.suits + 1] = k end
+    for _, k in ipairs(SMODS.Rank.obj_buffer) do d.ranks[#d.ranks + 1] = k end
+    for _, c in ipairs(G.P_CENTER_POOLS.Enhanced) do d.enhancements[#d.enhancements + 1] = c.key end
+    for _, k in ipairs(SMODS.Seal.obj_buffer) do d.seals[#d.seals + 1] = k end
+    d.editions = cx_creator_edition_keys()
+end
+
+local function cx_creator_front_key()
+    local d = CX_CREATOR
+    local suit = SMODS.Suits[d.suits[d.draft.suit]]
+    local rank = SMODS.Ranks[d.ranks[d.draft.rank]]
+    if not (suit and rank) then return nil end
+    return suit.card_key .. '_' .. rank.card_key
+end
+
+local function cx_creator_enh_center()
+    local key = CX_CREATOR.enhancements[CX_CREATOR.draft.enh]
+    return (key ~= 'none' and G.P_CENTERS[key]) or G.P_CENTERS.c_base
+end
+
+local function cx_creator_seal_key()
+    local key = CX_CREATOR.seals[CX_CREATOR.draft.seal]
+    if key == 'none' then return nil end
+    return key
+end
+
+local function cx_creator_refresh_preview()
+    local d = CX_CREATOR
+    local card = d.preview_card
+    if not (card and d.draft) then return end
+    local front = G.P_CARDS[cx_creator_front_key() or '']
+    if front then card:set_base(front) end
+    card:set_ability(cx_creator_enh_center())
+    card:set_seal(cx_creator_seal_key(), true, true)
+    -- silent=false skips the juice/sound block, so cycling stays quiet
+    card:set_edition(cx_creator_edition_for(d.draft.edition), true)
+end
+
+local function cx_creator_release_preview()
+    -- the Card/CardArea objects themselves are torn down with the overlay
+    -- UIBox (collection-page pattern); just drop our handles
+    CX_CREATOR.preview_card = nil
+    CX_CREATOR.preview_area = nil
+end
+
+local function cx_creator_type_screen()
+    local inactive = function(label)
+        return {n = G.UIT.R, config = {align = "cm", minw = 5, minh = 0.9, padding = 0.1, r = 0.1, colour = G.C.UI.BACKGROUND_INACTIVE}, nodes = {
+            {n = G.UIT.T, config = {text = label, scale = 0.45, colour = G.C.UI.TEXT_INACTIVE, shadow = true}}
+        }}
+    end
+    return create_UIBox_generic_options({
+        back_func = 'exit_overlay_menu',
+        contents = {
+            {n = G.UIT.R, config = {align = "cm", padding = 0.1}, nodes = {
+                {n = G.UIT.T, config = {text = 'Speak, and it is so', scale = 0.6, colour = G.C.color_rgb or G.C.WHITE, shadow = true}}
+            }},
+            {n = G.UIT.R, config = {align = "cm", padding = 0.1}, nodes = {
+                UIBox_button({label = {'Playing Card'}, button = 'cx_creator_open_playing_card', minw = 5, colour = G.C.BLUE})
+            }},
+            {n = G.UIT.R, config = {align = "cm", padding = 0.1}, nodes = {
+                UIBox_button({label = {'Consumable'}, button = 'cx_creator_open_consumable', minw = 5, colour = G.C.SECONDARY_SET.Tarot or G.C.PURPLE})
+            }},
+            {n = G.UIT.R, config = {align = "cm", padding = 0.1}, nodes = {inactive('Joker (soon)')}}
+        }
+    })
+end
+
+local function cx_creator_playing_card_screen()
+    local d = CX_CREATOR
+    cx_creator_build_pools()
+    d.draft = {suit = 1, rank = 1, enh = 1, seal = 1, edition = 1}
+    for i, k in ipairs(d.suits) do if k == 'Spades' then d.draft.suit = i end end
+    for i, k in ipairs(d.ranks) do if k == 'Ace' then d.draft.rank = i end end
+
+    local cw, ch = CX_CREATOR_UI_SCALE * G.CARD_W, CX_CREATOR_UI_SCALE * G.CARD_H
+    d.preview_area = CardArea(
+        G.ROOM.T.x + 0.2 * G.ROOM.T.w / 2, G.ROOM.T.h,
+        1.1 * cw, 1.1 * ch,
+        {card_limit = 1, type = 'title', highlight_limit = 0, collection = true})
+    local front = G.P_CARDS[cx_creator_front_key() or ''] or G.P_CARDS.S_A
+    d.preview_card = Card(d.preview_area.T.x, d.preview_area.T.y, cw, ch, front, G.P_CENTERS.c_base)
+    d.preview_card.bypass_discovery_center = true
+    d.preview_card.bypass_discovery_ui = true
+    d.preview_card.cx_creator_preview = true
+    d.preview_area:emplace(d.preview_card)
+
+    local suit_labels, rank_labels, enh_labels, seal_labels, edition_labels = {}, {}, {'None'}, {'None'}, {'None'}
+    for _, k in ipairs(d.suits) do suit_labels[#suit_labels + 1] = cx_creator_loc_misc(k, 'suits_plural') end
+    for _, k in ipairs(d.ranks) do rank_labels[#rank_labels + 1] = cx_creator_loc_misc(k, 'ranks') end
+    for i = 2, #d.enhancements do enh_labels[#enh_labels + 1] = cx_creator_loc_name('Enhanced', d.enhancements[i]) end
+    for i = 2, #d.seals do seal_labels[#seal_labels + 1] = cx_creator_loc_name('Other', d.seals[i]:lower() .. '_seal') end
+    for i = 2, #d.editions do edition_labels[#edition_labels + 1] = cx_creator_loc_name('Edition', d.editions[i]) end
+
+    local function cycle_row(label, field, labels)
+        return {n = G.UIT.R, config = {align = "cm", padding = 0.03}, nodes = {
+            {n = G.UIT.C, config = {align = "cm", minw = 1.8}, nodes = {
+                {n = G.UIT.T, config = {text = label, scale = 0.38, colour = G.C.UI.TEXT_LIGHT, shadow = true}}
+            }},
+            {n = G.UIT.C, config = {align = "cm"}, nodes = {
+                create_option_cycle({
+                    options = labels,
+                    current_option = d.draft[field],
+                    opt_callback = 'cx_creator_cycle',
+                    cx_field = field,
+                    w = 4.5,
+                    scale = 0.85,
+                    colour = G.C.RED,
+                    no_pips = true
+                })
+            }}
+        }}
+    end
+
+    return create_UIBox_generic_options({
+        back_func = 'cx_creator_back_to_type',
+        contents = {
+            {n = G.UIT.R, config = {align = "cm", padding = 0.05, no_fill = true}, nodes = {
+                {n = G.UIT.O, config = {object = d.preview_area}}
+            }},
+            cycle_row('Suit', 'suit', suit_labels),
+            cycle_row('Rank', 'rank', rank_labels),
+            cycle_row('Enhancement', 'enh', enh_labels),
+            cycle_row('Seal', 'seal', seal_labels),
+            cycle_row('Edition', 'edition', edition_labels),
+            {n = G.UIT.R, config = {align = "cm", padding = 0.08}, nodes = {
+                UIBox_button({label = {'Create'}, button = 'cx_creator_confirm', minw = 3.5, minh = 0.7, scale = 0.45, colour = G.C.GREEN})
+            }}
+        }
+    })
+end
+
+-- consumable picker: set select -> paged grid of real cards, click to create
+local CX_CREATOR_GRID_ROWS, CX_CREATOR_GRID_COLS = 2, 5
+
+local function cx_creator_fill_cons_grid()
+    local d = CX_CREATOR
+    if not (d.grid_areas and d.cons_set) then return end
+    local pool = G.P_CENTER_POOLS[d.cons_set] or {}
+    local per_page = CX_CREATOR_GRID_ROWS * CX_CREATOR_GRID_COLS
+    local cw, ch = CX_CREATOR_UI_SCALE * G.CARD_W, CX_CREATOR_UI_SCALE * G.CARD_H
+    local edition = cx_creator_edition_for(d.cons_edition)
+    for j = 1, #d.grid_areas do
+        local area = d.grid_areas[j]
+        for i = #area.cards, 1, -1 do
+            local c = area:remove_card(area.cards[i])
+            if c then c:remove() end
+        end
+    end
+    for i = 1, CX_CREATOR_GRID_COLS do
+        for j = 1, #d.grid_areas do
+            local center = pool[i + (j - 1) * CX_CREATOR_GRID_COLS + per_page * ((d.cons_page or 1) - 1)]
+            if center then
+                local area = d.grid_areas[j]
+                local card = Card(area.T.x + area.T.w / 2, area.T.y, cw, ch, G.P_CARDS.empty, center)
+                card.bypass_discovery_center = true
+                card.bypass_discovery_ui = true
+                card.cx_creator_preview = true
+                card.cx_creator_pick = true
+                if edition then card:set_edition(edition, true) end
+                area:emplace(card)
+            end
+        end
+    end
+end
+
+local function cx_creator_set_label(k)
+    local name = cx_creator_loc_misc('k_' .. string.lower(k), 'dictionary')
+    if name == 'k_' .. string.lower(k) then name = k end
+    return name
+end
+
+local function cx_creator_consumable_sets_screen()
+    local rows = {
+        {n = G.UIT.R, config = {align = "cm", padding = 0.06}, nodes = {
+            {n = G.UIT.T, config = {text = 'Choose a set', scale = 0.5, colour = G.C.color_rgb or G.C.WHITE, shadow = true}}
+        }}
+    }
+    for _, k in ipairs(SMODS.ConsumableType.obj_buffer) do
+        local pool = G.P_CENTER_POOLS[k]
+        if pool and #pool > 0 then
+            rows[#rows + 1] = {n = G.UIT.R, config = {align = "cm", padding = 0.05}, nodes = {
+                UIBox_button({
+                    label = {cx_creator_set_label(k) .. ' (' .. #pool .. ')'},
+                    button = 'cx_creator_open_cons_grid',
+                    ref_table = {cx_set = k},
+                    minw = 4.5,
+                    minh = 0.7,
+                    scale = 0.4,
+                    colour = G.C.SECONDARY_SET[k] or G.C.PURPLE
+                })
+            }}
+        end
+    end
+    return create_UIBox_generic_options({back_func = 'cx_creator_back_to_type', contents = rows})
+end
+
+local function cx_creator_cons_grid_screen(set)
+    local d = CX_CREATOR
+    d.cons_set = set
+    d.cons_page = 1
+    d.cons_edition = 1
+    d.editions = cx_creator_edition_keys()
+    d.grid_areas = {}
+    local pool = G.P_CENTER_POOLS[set] or {}
+    local per_page = CX_CREATOR_GRID_ROWS * CX_CREATOR_GRID_COLS
+    local pages = math.max(1, math.ceil(#pool / per_page))
+    local cw, ch = CX_CREATOR_UI_SCALE * G.CARD_W, CX_CREATOR_UI_SCALE * G.CARD_H
+    local area_rows = {}
+    for j = 1, CX_CREATOR_GRID_ROWS do
+        d.grid_areas[j] = CardArea(
+            G.ROOM.T.x + 0.2 * G.ROOM.T.w / 2, G.ROOM.T.h,
+            (CX_CREATOR_GRID_COLS + 0.25) * cw, 1.05 * ch,
+            {card_limit = CX_CREATOR_GRID_COLS, type = 'title', highlight_limit = 0, collection = true})
+        area_rows[#area_rows + 1] = {n = G.UIT.R, config = {align = "cm", padding = 0.05, no_fill = true}, nodes = {
+            {n = G.UIT.O, config = {object = d.grid_areas[j]}}
+        }}
+    end
+    cx_creator_fill_cons_grid()
+    local page_options = {}
+    for i = 1, pages do page_options[#page_options + 1] = localize('k_page') .. ' ' .. i .. '/' .. pages end
+    local edition_labels = {'None'}
+    for i = 2, #d.editions do edition_labels[#edition_labels + 1] = cx_creator_loc_name('Edition', d.editions[i]) end
+    return create_UIBox_generic_options({
+        back_func = 'cx_creator_back_to_cons_sets',
+        contents = {
+            {n = G.UIT.R, config = {align = "cm", padding = 0.03}, nodes = {
+                {n = G.UIT.T, config = {text = 'Click a card to create it', scale = 0.4, colour = G.C.UI.TEXT_LIGHT, shadow = true}}
+            }},
+            {n = G.UIT.R, config = {align = "cm", r = 0.1, colour = G.C.BLACK, emboss = 0.05}, nodes = area_rows},
+            {n = G.UIT.R, config = {align = "cm", padding = 0.05}, nodes = {
+                {n = G.UIT.C, config = {align = "cm"}, nodes = {
+                    create_option_cycle({options = page_options, current_option = 1, opt_callback = 'cx_creator_cons_page', w = 3.5, colour = G.C.RED, no_pips = true, focus_args = {snap_to = true, nav = 'wide'}})
+                }},
+                {n = G.UIT.C, config = {align = "cm", padding = 0.05}, nodes = {
+                    create_option_cycle({options = edition_labels, current_option = 1, opt_callback = 'cx_creator_cons_edition', w = 3.5, colour = G.C.DARK_EDITION or G.C.PURPLE, no_pips = true})
+                }}
+            }}
+        }
+    })
+end
+
+local function cx_creator_pick_consumable(grid_card)
+    local center = cx_center(grid_card)
+    if not (center and center.key and G.consumeables) then return end
+    local edition = cx_creator_edition_for(CX_CREATOR.cons_edition)
+    CX_CREATOR.grid_areas = nil
+    G.FUNCS.exit_overlay_menu()
+    discover_card(center)
+    local card = create_card(center.set, G.consumeables, nil, nil, nil, nil, center.key)
+    card:add_to_deck()
+    G.consumeables:emplace(card)
+    if edition then card:set_edition(edition, true, true) end
+    card:start_materialize({G.C.SECONDARY_SET.Spectral})
+    play_sound('card1', 0.8, 0.6)
+    play_sound('generic1')
+end
+
+-- grid cards are chosen by clicking the card itself
+local card_click_ref = Card.click
+function Card:click()
+    if self.cx_creator_pick then
+        cx_creator_pick_consumable(self)
+        return
+    end
+    return card_click_ref(self)
+end
+
+G.FUNCS.cx_creator_open_consumable = function(e)
+    G.FUNCS.overlay_menu{definition = cx_creator_consumable_sets_screen()}
+end
+
+G.FUNCS.cx_creator_open_cons_grid = function(e)
+    local set = e.config.ref_table and e.config.ref_table.cx_set
+    if set then
+        G.FUNCS.overlay_menu{definition = cx_creator_cons_grid_screen(set)}
+    end
+end
+
+G.FUNCS.cx_creator_back_to_cons_sets = function(e)
+    CX_CREATOR.grid_areas = nil
+    G.FUNCS.overlay_menu{definition = cx_creator_consumable_sets_screen()}
+end
+
+G.FUNCS.cx_creator_cons_page = function(args)
+    if not (args and args.cycle_config) then return end
+    CX_CREATOR.cons_page = args.cycle_config.current_option
+    cx_creator_fill_cons_grid()
+end
+
+G.FUNCS.cx_creator_cons_edition = function(args)
+    if not (args and args.cycle_config) then return end
+    CX_CREATOR.cons_edition = args.cycle_config.current_option
+    local edition = cx_creator_edition_for(CX_CREATOR.cons_edition)
+    for _, area in ipairs(CX_CREATOR.grid_areas or {}) do
+        for _, card in ipairs(area.cards) do
+            card:set_edition(edition, true)
+        end
+    end
+end
+
+G.FUNCS.can_cx_create = function(e)
+    local card = e.config.ref_table
+    if card and card.added_to_deck and (G.GAME.STOP_USE or 0) <= 0 then
+        e.config.colour = G.C.PURPLE
+        e.config.button = 'cx_creator_open'
+    else
+        e.config.colour = G.C.UI.BACKGROUND_INACTIVE
+        e.config.button = nil
+    end
+end
+
+G.FUNCS.cx_creator_open = function(e)
+    CX_CREATOR.draft = nil
+    CX_CREATOR.grid_areas = nil
+    cx_creator_release_preview()
+    G.FUNCS.overlay_menu{definition = cx_creator_type_screen()}
+end
+
+G.FUNCS.cx_creator_back_to_type = function(e)
+    cx_creator_release_preview()
+    CX_CREATOR.grid_areas = nil
+    G.FUNCS.overlay_menu{definition = cx_creator_type_screen()}
+end
+
+G.FUNCS.cx_creator_open_playing_card = function(e)
+    G.FUNCS.overlay_menu{definition = cx_creator_playing_card_screen()}
+end
+
+G.FUNCS.cx_creator_cycle = function(args)
+    local field = args and args.cycle_config and args.cycle_config.cx_field
+    if field and CX_CREATOR.draft then
+        CX_CREATOR.draft[field] = args.to_key
+        cx_creator_refresh_preview()
+    end
+end
+
+G.FUNCS.cx_creator_confirm = function(e)
+    local d = CX_CREATOR
+    if not d.draft then return end
+    local front = G.P_CARDS[cx_creator_front_key() or '']
+    if not front then return end
+    local enh = cx_creator_enh_center()
+    local seal = cx_creator_seal_key()
+    local edition = cx_creator_edition_for(d.draft.edition)
+    cx_creator_release_preview()
+    G.FUNCS.exit_overlay_menu()
+
+    -- mid-round the card lands in hand, otherwise it joins the deck;
+    -- mirrors the standard-pack take-card flow (button_callbacks use_card)
+    local area = (G.STATE == G.STATES.SELECTING_HAND and G.hand) or G.deck
+    if not area then return end
+    local card = Card(area.T.x + area.T.w / 2, area.T.y, G.CARD_W, G.CARD_H, front, G.P_CENTERS.c_base)
+    if enh ~= G.P_CENTERS.c_base then card:set_ability(enh) end
+    if seal then card:set_seal(seal, true, true) end
+    if edition then card:set_edition(edition, true, true) end
+    G.playing_card = (G.playing_card and G.playing_card + 1) or 1
+    card.playing_card = G.playing_card
+    area:emplace(card)
+    card:add_to_deck()
+    table.insert(G.playing_cards, card)
+    card:start_materialize({G.C.SECONDARY_SET.Spectral})
+    playing_card_joker_effects({card})
+    play_sound('card1', 0.8, 0.6)
+    play_sound('generic1')
+end
+
+-- selling the Creator pays out (~1e100 via extra_value) but the Creator stays:
+-- the flag makes the start_dissolve wrapper swallow only the sell flow's
+-- dissolve, so the money lands and the card remains sellable again
+local card_sell_card_ref = Card.sell_card
+function Card:sell_card()
+    local staying = cx_is_creator_card(self) or cx_is_entity_card(self)
+    if cx_is_creator_card(self) then
+        self.cx_sell_stay = true
+    end
+    local ret = card_sell_card_ref(self)
+    if staying then
+        -- sell_card strips the highlight buttons up front; this card survives
+        -- the sale, so rebuild them once the sell events have settled
+        G.E_MANAGER:add_event(Event({trigger = 'after', delay = 0.4, func = function()
+            if not self.REMOVED and self.area == G.jokers and self.highlighted then
+                self:highlight(true)
+            end
+            return true
+        end}))
+    end
+    return ret
+end
+
+-- Create button on the Creator's highlight UI, above Sell (Buttercup pattern)
+local cx_uasb_ref = G.UIDEF.use_and_sell_buttons
+function G.UIDEF.use_and_sell_buttons(card)
+    local retval = cx_uasb_ref(card)
+    if cx_is_creator_card(card) and card.added_to_deck
+        and retval and retval.nodes and retval.nodes[1] and retval.nodes[1].nodes then
+        table.insert(retval.nodes[1].nodes, 1, {n = G.UIT.R, config = {align = "cl"}, nodes = {
+            {n = G.UIT.C, config = {align = "cr"}, nodes = {
+                {n = G.UIT.C, config = {ref_table = card, align = "cr", maxw = 1.25, padding = 0.1, r = 0.08, minw = 1.25, hover = true, shadow = true, colour = G.C.UI.BACKGROUND_INACTIVE, button = 'cx_creator_open', func = 'can_cx_create'}, nodes = {
+                    {n = G.UIT.B, config = {w = 0.1, h = 0.6}},
+                    {n = G.UIT.T, config = {text = 'Create', colour = G.C.UI.TEXT_LIGHT, scale = 0.4, shadow = true}}
+                }}
+            }}
+        }})
+    end
+    return retval
+end
+
+-- split/swirl/reform shader for the tesseract soul: shard motion lives in the
+-- shader (creator.fs) so the sprite stays a single frame; the colour treatment
+-- is the Entity's glitch pipeline, sampled through the shard mapping
+SMODS.Shader {
+    key = 'creator',
+    path = 'creator.fs',
+    send_vars = function(sprite, card)
+        return { cx_time = G.TIMERS.REAL }
+    end
+}
+
+-- shimmering psychedelic treatment for the Creator's card base (counterpart
+-- to the Entity's fractal shatter): hypno rings x spokes hue churn, glossy
+-- sheens/glint, and a random whole-face negative flicker
+SMODS.Shader {
+    key = 'creator_base',
+    path = 'creator_base.fs',
+    send_vars = function(sprite, card)
+        return { cx_time = G.TIMERS.REAL }
+    end
+}
+
+local cx_creator_echo_colour = {1, 1, 1, 0.3}
+
+-- deliberate contrast with the Entity's manic soul: slow weightless breathing,
+-- no jitter — the drama is the shader's shard cycle, not the sprite's motion
+local function cx_creator_soul_draw(card, scale_mod, rotate_mod)
+    local fs = card.children.floating_sprite
+    if not fs then return end
+    local t = G.TIMERS.REAL
+    local s = 0.08 + 0.03*math.sin(0.9*t)
+    local r = 0.06*math.sin(0.55*t + 1.0)
+    local send = card.ARGS and card.ARGS.send_to_shader
+
+    -- no drop shadow on purpose: a static whole-cube shadow gives the shard
+    -- cycle away (the shadow would sit intact while the pieces drift)
+
+    -- two faint afterimages drifting on long, slow phases
+    for i = 2, 1, -1 do
+        local phase = 0.6*t + i*2.4
+        cx_creator_echo_colour[4] = 0.30 - 0.10*i
+        fs.drawing_colour = cx_creator_echo_colour
+        fs:draw_shader('cx_creator', nil, send, nil, card.children.center,
+            s + 0.02*i, r + 0.03*math.sin(0.5*phase),
+            0.02*i*math.cos(phase), 0.015*i*math.sin(0.8*phase))
+    end
+    fs.drawing_colour = nil
+
+    fs:draw_shader('cx_creator', nil, send, nil, card.children.center, s, r, 0, 0)
+end
+
+SMODS.Joker {
+    key = 'creator',
+    loc_txt = {
+        name = 'The Creator',
+        text = {
+            '{C:color_rgb}Speak, and it is so{}',
+            'Select this Joker and press {C:attention}Create{}',
+            'to conjure {C:attention}any card{} into the run',
+            '{C:inactive}Free of charge, forever{}'
+        }
+    },
+    pos = {x = 0, y = 0},
+    atlas = 'creator_float',
+    soul_pos = {x = 1, y = 0, draw = cx_creator_soul_draw},
+    set_card_type_badge = conceptual,
+    no_doe = true,
+    cost = 0,
+    rarity = 1,
+    unlocked = true,
+    discovered = true,
+    blueprint_compat = false,
+    eternal_compat = false,
+    immutable = true,
+    cx_creator = true
 }
 
 ----------------------------------------------

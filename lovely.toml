@@ -71,6 +71,46 @@ end
 '''
 match_indent = true
 
+# SHOP STAPLES DON'T CONSUME ROLLABLE SLOTS
+# The three shop fill loops share this exact line; counting rollables through
+# CX_SHOP_ROLLABLE_COUNT (AlephNull.lua) instead of #cards means the Entity and
+# Creator ride above the shop's joker_max instead of eating its slots.
+[[patches]]
+[patches.pattern]
+target = "game.lua"
+pattern = "for i = 1, G.GAME.shop.joker_max - #G.shop_jokers.cards do"
+position = "at"
+payload = "for i = 1, G.GAME.shop.joker_max - (CX_SHOP_ROLLABLE_COUNT and CX_SHOP_ROLLABLE_COUNT() or #G.shop_jokers.cards) do"
+match_indent = true
+
+[[patches]]
+[patches.pattern]
+target = "functions/common_events.lua"
+pattern = "for i = 1, G.GAME.shop.joker_max - #G.shop_jokers.cards do"
+position = "at"
+payload = "for i = 1, G.GAME.shop.joker_max - (CX_SHOP_ROLLABLE_COUNT and CX_SHOP_ROLLABLE_COUNT() or #G.shop_jokers.cards) do"
+match_indent = true
+
+[[patches]]
+[patches.pattern]
+target = "functions/button_callbacks.lua"
+pattern = "for i = 1, G.GAME.shop.joker_max - #G.shop_jokers.cards do"
+position = "at"
+payload = "for i = 1, G.GAME.shop.joker_max - (CX_SHOP_ROLLABLE_COUNT and CX_SHOP_ROLLABLE_COUNT() or #G.shop_jokers.cards) do"
+match_indent = true
+
+# change_shop_size's shrink cull removes cards above joker_max from the top;
+# raise the floor by the staple count so shrinking culls the right number of
+# rollables instead of eating staples (watchdog would respawn them, but the
+# player would lose a rollable slot's worth of stock)
+[[patches]]
+[patches.pattern]
+target = "functions/common_events.lua"
+pattern = "for i = #G.shop_jokers.cards, G.GAME.shop.joker_max+1, -1 do"
+position = "at"
+payload = "for i = #G.shop_jokers.cards, G.GAME.shop.joker_max + (CX_SHOP_STAPLE_COUNT and CX_SHOP_STAPLE_COUNT() or 0) + 1, -1 do"
+match_indent = true
+
 # ALEPH NULL TAKEOVER WATCHDOG
 [[patches]]
 [patches.pattern]
