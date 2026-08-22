@@ -1743,11 +1743,6 @@ local function cx_creator_release_preview()
 end
 
 local function cx_creator_type_screen()
-    local inactive = function(label)
-        return {n = G.UIT.R, config = {align = "cm", minw = 5, minh = 0.9, padding = 0.1, r = 0.1, colour = G.C.UI.BACKGROUND_INACTIVE}, nodes = {
-            {n = G.UIT.T, config = {text = label, scale = 0.45, colour = G.C.UI.TEXT_INACTIVE, shadow = true}}
-        }}
-    end
     return create_UIBox_generic_options({
         back_func = 'exit_overlay_menu',
         contents = {
@@ -1760,7 +1755,9 @@ local function cx_creator_type_screen()
             {n = G.UIT.R, config = {align = "cm", padding = 0.1}, nodes = {
                 UIBox_button({label = {'Consumable'}, button = 'cx_creator_open_consumable', minw = 5, colour = G.C.SECONDARY_SET.Tarot or G.C.PURPLE})
             }},
-            {n = G.UIT.R, config = {align = "cm", padding = 0.1}, nodes = {inactive('Joker (soon)')}}
+            {n = G.UIT.R, config = {align = "cm", padding = 0.1}, nodes = {
+                UIBox_button({label = {'Joker'}, button = 'cx_creator_open_joker', minw = 5, colour = G.C.RED})
+            }}
         }
     })
 end
@@ -1955,10 +1952,34 @@ local function cx_creator_pick_consumable(grid_card)
     play_sound('generic1')
 end
 
+local function cx_creator_pick_joker(grid_card)
+    local center = cx_center(grid_card)
+    if not (center and center.key and G.jokers) then return end
+    local jk = CX_CREATOR.jk or {}
+    local edition = cx_creator_edition_for(jk.edition_i)
+    local sticker = jk.stickers and jk.stickers[jk.sticker_i or 1]
+    CX_CREATOR.grid_areas = nil
+    G.FUNCS.exit_overlay_menu()
+    discover_card(center)
+    local card = create_card('Joker', G.jokers, nil, nil, nil, nil, center.key)
+    card:add_to_deck()
+    G.jokers:emplace(card)
+    if edition then card:set_edition(edition, true, true) end
+    if sticker and sticker ~= 'none' and SMODS.Stickers[sticker] then
+        SMODS.Stickers[sticker]:apply(card, true)
+    end
+    card:start_materialize({G.C.SECONDARY_SET.Spectral})
+    play_sound('card1', 0.8, 0.6)
+    play_sound('generic1')
+end
+
 -- grid cards are chosen by clicking the card itself
 local card_click_ref = Card.click
 function Card:click()
-    if self.cx_creator_pick then
+    if self.cx_creator_pick == 'joker' then
+        cx_creator_pick_joker(self)
+        return
+    elseif self.cx_creator_pick then
         cx_creator_pick_consumable(self)
         return
     end
@@ -1994,6 +2015,189 @@ G.FUNCS.cx_creator_cons_edition = function(args)
     for _, area in ipairs(CX_CREATOR.grid_areas or {}) do
         for _, card in ipairs(area.cards) do
             card:set_edition(edition, true)
+        end
+    end
+end
+
+-- joker picker: the big pool (hundreds with Cryptid) gets rarity + source
+-- filters on top of the paged grid, plus edition and sticker cycles
+local function cx_creator_rarity_label(r)
+    if r == 'any' then return 'Any Rarity' end
+    local key
+    if type(r) == 'number' then
+        key = ({'k_common', 'k_uncommon', 'k_rare', 'k_legendary'})[r] or tostring(r)
+    else
+        key = 'k_' .. string.lower(tostring(r))
+    end
+    local name = cx_creator_loc_misc(key, 'dictionary')
+    if name == key then name = tostring(r) end
+    return name
+end
+
+local function cx_creator_jk_build()
+    local jk = CX_CREATOR.jk
+    jk.rarities, jk.sources = {'any'}, {'any'}
+    local seen_r, seen_s = {}, {}
+    for _, c in ipairs(G.P_CENTER_POOLS.Joker) do
+        local r = c.rarity or 1
+        if not seen_r[r] then seen_r[r] = true; jk.rarities[#jk.rarities + 1] = r end
+        local s = (c.mod and c.mod.name) or 'Base Game'
+        if not seen_s[s] then seen_s[s] = true; jk.sources[#jk.sources + 1] = s end
+    end
+    jk.pool = {}
+    local want_r = jk.rarities[jk.rarity_i] or 'any'
+    local want_s = jk.sources[jk.source_i] or 'any'
+    for _, c in ipairs(G.P_CENTER_POOLS.Joker) do
+        local r_ok = want_r == 'any' or (c.rarity or 1) == want_r
+        local s_ok = want_s == 'any' or ((c.mod and c.mod.name) or 'Base Game') == want_s
+        if r_ok and s_ok then jk.pool[#jk.pool + 1] = c end
+    end
+end
+
+local function cx_creator_fill_joker_grid()
+    local d = CX_CREATOR
+    if not (d.grid_areas and d.jk and d.jk.pool) then return end
+    local jk = d.jk
+    local per_page = CX_CREATOR_GRID_ROWS * CX_CREATOR_GRID_COLS
+    local cw, ch = CX_CREATOR_UI_SCALE * G.CARD_W, CX_CREATOR_UI_SCALE * G.CARD_H
+    local edition = cx_creator_edition_for(jk.edition_i)
+    local sticker = jk.stickers and jk.stickers[jk.sticker_i or 1]
+    for j = 1, #d.grid_areas do
+        local area = d.grid_areas[j]
+        for i = #area.cards, 1, -1 do
+            local c = area:remove_card(area.cards[i])
+            if c then c:remove() end
+        end
+    end
+    for i = 1, CX_CREATOR_GRID_COLS do
+        for j = 1, #d.grid_areas do
+            local center = jk.pool[i + (j - 1) * CX_CREATOR_GRID_COLS + per_page * ((jk.page or 1) - 1)]
+            if center then
+                local area = d.grid_areas[j]
+                local card = Card(area.T.x + area.T.w / 2, area.T.y, cw, ch, G.P_CARDS.empty, center)
+                card.bypass_discovery_center = true
+                card.bypass_discovery_ui = true
+                card.cx_creator_preview = true
+                card.cx_creator_pick = 'joker'
+                if edition then card:set_edition(edition, true) end
+                if sticker and sticker ~= 'none' then card.ability[sticker] = true end
+                area:emplace(card)
+            end
+        end
+    end
+end
+
+local function cx_creator_joker_screen(reset)
+    local d = CX_CREATOR
+    if reset or not d.jk then
+        d.jk = {rarity_i = 1, source_i = 1, edition_i = 1, sticker_i = 1}
+    end
+    local jk = d.jk
+    jk.page = 1
+    d.editions = cx_creator_edition_keys()
+    jk.stickers = {'none'}
+    for _, k in ipairs(SMODS.Sticker.obj_buffer) do jk.stickers[#jk.stickers + 1] = k end
+    cx_creator_jk_build()
+
+    d.grid_areas = {}
+    local per_page = CX_CREATOR_GRID_ROWS * CX_CREATOR_GRID_COLS
+    local pages = math.max(1, math.ceil(#jk.pool / per_page))
+    local cw, ch = CX_CREATOR_UI_SCALE * G.CARD_W, CX_CREATOR_UI_SCALE * G.CARD_H
+    local area_rows = {}
+    for j = 1, CX_CREATOR_GRID_ROWS do
+        d.grid_areas[j] = CardArea(
+            G.ROOM.T.x + 0.2 * G.ROOM.T.w / 2, G.ROOM.T.h,
+            (CX_CREATOR_GRID_COLS + 0.25) * cw, 1.05 * ch,
+            {card_limit = CX_CREATOR_GRID_COLS, type = 'title', highlight_limit = 0, collection = true})
+        area_rows[#area_rows + 1] = {n = G.UIT.R, config = {align = "cm", padding = 0.05, no_fill = true}, nodes = {
+            {n = G.UIT.O, config = {object = d.grid_areas[j]}}
+        }}
+    end
+    cx_creator_fill_joker_grid()
+
+    local page_options = {}
+    for i = 1, pages do page_options[#page_options + 1] = localize('k_page') .. ' ' .. i .. '/' .. pages end
+    local rarity_labels = {}
+    for _, r in ipairs(jk.rarities) do rarity_labels[#rarity_labels + 1] = cx_creator_rarity_label(r) end
+    local source_labels = {}
+    for _, s in ipairs(jk.sources) do source_labels[#source_labels + 1] = (s == 'any') and 'Any Source' or s end
+    local edition_labels = {'None'}
+    for i = 2, #d.editions do edition_labels[#edition_labels + 1] = cx_creator_loc_name('Edition', d.editions[i]) end
+    local sticker_labels = {'None'}
+    for i = 2, #jk.stickers do sticker_labels[#sticker_labels + 1] = cx_creator_loc_misc(jk.stickers[i], 'labels') end
+
+    local function half_cycle(labels, cur, callback, colour)
+        return {n = G.UIT.C, config = {align = "cm", padding = 0.04}, nodes = {
+            create_option_cycle({options = labels, current_option = cur, opt_callback = callback, w = 3.4, scale = 0.85, colour = colour, no_pips = true})
+        }}
+    end
+
+    return create_UIBox_generic_options({
+        back_func = 'cx_creator_back_to_type',
+        contents = {
+            {n = G.UIT.R, config = {align = "cm", padding = 0.03}, nodes = {
+                {n = G.UIT.T, config = {text = 'Click a Joker to create it', scale = 0.4, colour = G.C.UI.TEXT_LIGHT, shadow = true}}
+            }},
+            {n = G.UIT.R, config = {align = "cm", r = 0.1, colour = G.C.BLACK, emboss = 0.05}, nodes = area_rows},
+            {n = G.UIT.R, config = {align = "cm", padding = 0.03}, nodes = {
+                half_cycle(page_options, jk.page, 'cx_creator_jk_page', G.C.RED),
+                half_cycle(rarity_labels, jk.rarity_i, 'cx_creator_jk_rarity', G.C.ORANGE)
+            }},
+            {n = G.UIT.R, config = {align = "cm", padding = 0.03}, nodes = {
+                half_cycle(source_labels, jk.source_i, 'cx_creator_jk_source', G.C.BLUE),
+                half_cycle(edition_labels, jk.edition_i, 'cx_creator_jk_edition', G.C.DARK_EDITION or G.C.PURPLE)
+            }},
+            {n = G.UIT.R, config = {align = "cm", padding = 0.03}, nodes = {
+                half_cycle(sticker_labels, jk.sticker_i, 'cx_creator_jk_sticker', G.C.GREEN)
+            }}
+        }
+    })
+end
+
+G.FUNCS.cx_creator_open_joker = function(e)
+    G.FUNCS.overlay_menu{definition = cx_creator_joker_screen(true)}
+end
+
+G.FUNCS.cx_creator_jk_page = function(args)
+    if not (args and args.cycle_config and CX_CREATOR.jk) then return end
+    CX_CREATOR.jk.page = args.cycle_config.current_option
+    cx_creator_fill_joker_grid()
+end
+
+-- filter changes rebuild the screen: the page cycle's option list depends on
+-- the filtered pool size (edition/sticker selections survive in CX_CREATOR.jk)
+G.FUNCS.cx_creator_jk_rarity = function(args)
+    if not (args and args.cycle_config and CX_CREATOR.jk) then return end
+    CX_CREATOR.jk.rarity_i = args.cycle_config.current_option
+    G.FUNCS.overlay_menu{definition = cx_creator_joker_screen()}
+end
+
+G.FUNCS.cx_creator_jk_source = function(args)
+    if not (args and args.cycle_config and CX_CREATOR.jk) then return end
+    CX_CREATOR.jk.source_i = args.cycle_config.current_option
+    G.FUNCS.overlay_menu{definition = cx_creator_joker_screen()}
+end
+
+G.FUNCS.cx_creator_jk_edition = function(args)
+    if not (args and args.cycle_config and CX_CREATOR.jk) then return end
+    CX_CREATOR.jk.edition_i = args.cycle_config.current_option
+    local edition = cx_creator_edition_for(CX_CREATOR.jk.edition_i)
+    for _, area in ipairs(CX_CREATOR.grid_areas or {}) do
+        for _, card in ipairs(area.cards) do
+            card:set_edition(edition, true)
+        end
+    end
+end
+
+G.FUNCS.cx_creator_jk_sticker = function(args)
+    if not (args and args.cycle_config and CX_CREATOR.jk) then return end
+    local jk = CX_CREATOR.jk
+    jk.sticker_i = args.cycle_config.current_option
+    local sk = jk.stickers[jk.sticker_i]
+    for _, area in ipairs(CX_CREATOR.grid_areas or {}) do
+        for _, card in ipairs(area.cards) do
+            for i = 2, #jk.stickers do card.ability[jk.stickers[i]] = nil end
+            if sk ~= 'none' then card.ability[sk] = true end
         end
     end
 end
