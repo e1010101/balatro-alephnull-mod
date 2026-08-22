@@ -1143,10 +1143,17 @@ if Cryptid then
         if type(modifier_ref) == 'function' then
             Cryptid[fname] = function(card, ...)
                 if cx_card_is_unmodifiable(card) then
-                    if card and card.T then
+                    -- popup only for cards actually on the table (Cryptid also
+                    -- runs these on freshly created cards before emplacing)
+                    if card and card.T and card.area then
                         card_status_text(card, 'Immune', nil, 0.05*card.T.h, G.C.RED, nil, 0.6, nil, nil, 'bm', 'cancel')
                     end
-                    return
+                    -- honour the originals' contract: they return true on
+                    -- completion, and callers inside G.E_MANAGER events can
+                    -- pass that through as the event's done-flag — returning
+                    -- nil here made such events retry forever (frozen queue,
+                    -- stuck cards, dead buttons)
+                    return true
                 end
                 return modifier_ref(card, ...)
             end
