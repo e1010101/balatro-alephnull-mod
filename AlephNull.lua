@@ -11,6 +11,12 @@
 
 local conceptual = function(self, card, badges)
 	local scaling = 1.25
+	-- set_card_type_badge REPLACES the rarity badge row, so the Transfinite
+	-- badge must be re-added here or the rarity would never display. Pill
+	-- colour is the live G.C.color_rgb table (mutated in place every frame
+	-- by the Game:update hook), so the badge strobes like the '?????' text;
+	-- the static G.C.RARITY entry only covers frames before the first update.
+	badges[#badges + 1] = create_badge(localize('k_cx_transfinite'), G.C.color_rgb or G.C.RARITY.cx_transfinite, nil, scaling)
 	badges[#badges + 1] = {n=G.UIT.R, config={align = "cm"}, nodes={
 		{n=G.UIT.R, config={align = "cm", colour = G.C.BLACK, r = 0.1, minw = 2, minh = 0.4*scaling, emboss = 0.05, padding = 0.03*scaling}, nodes={
 			{n=G.UIT.B, config={h=0.1,w=0.03}},
@@ -1567,6 +1573,21 @@ local function cx_entity_soul_draw(card, scale_mod, rotate_mod)
     fs:draw_shader('cx_entity', nil, send, nil, card.children.center, s, r, jx, jy)
 end
 
+-- RARITY: Transfinite — the tier above every other mod's ladder, worn only by
+-- the staple jokers. Weight is pinned to 0 through get_weight as well as
+-- default_weight so no reroll/voucher rarity modifier can ever make it roll
+-- naturally; the staples reach shops exclusively through CX_SHOP_STAPLES.
+SMODS.Rarity {
+    key = 'transfinite',
+    loc_txt = { name = 'Transfinite' },
+    badge_colour = HEX('7A44EB'),
+    default_weight = 0,
+    pools = { ["Joker"] = true },
+    get_weight = function(self, weight, object_type)
+        return 0
+    end,
+}
+
 SMODS.Joker {
     key = 'entity',
     loc_txt = {
@@ -1581,7 +1602,7 @@ SMODS.Joker {
     set_card_type_badge = conceptual,
     no_doe = true,
     cost = 0,
-    rarity = 1,
+    rarity = 'cx_transfinite',
     unlocked = true,
     discovered = true,
     blueprint_compat = true,
@@ -2584,7 +2605,7 @@ SMODS.Joker {
     set_card_type_badge = conceptual,
     no_doe = true,
     cost = 0,
-    rarity = 1,
+    rarity = 'cx_transfinite',
     unlocked = true,
     discovered = true,
     blueprint_compat = false,
