@@ -634,6 +634,22 @@ local function cx_enforce_conceptual_editions()
     end
 end
 
+-- Sell payout for Entity/Creator: truly infinite when a big-number lib is
+-- present. Amulet renders it "Infinity" and its STR_UNPACK maps the saved
+-- `inf` literal back to math.huge; vanilla STR_UNPACK has no `inf` in scope
+-- (a saved inf loads as nil and corrupts the run), so plain-Lua runs keep
+-- the old 1e100.
+local function cx_staple_sell_value()
+    return (Big and to_big) and math.huge or 1e100
+end
+
+-- tostring(math.huge) is "inf" — pin the label the sell button renders
+local function cx_fix_staple_sell_label(card)
+    if card.sell_cost == math.huge and card.facing ~= 'back' then
+        card.sell_cost_label = 'Infinity'
+    end
+end
+
 -- Owned Entity/Creator upkeep: never eternal (they must stay sellable — the
 -- selling IS the money printer), always Conceptual. Also heals saves written
 -- before these rules existed and stickers/editions forced by other mods.
@@ -654,8 +670,8 @@ local function cx_heal_staple_jokers()
             -- check keeps the guard convergent if a big-number lib converted
             -- the value (plain ~= Big compares true forever in Lua 5.1).
             if joker.ability and (type(joker.ability.extra_value) ~= 'number'
-                or joker.ability.extra_value ~= 1e100) then
-                joker.ability.extra_value = 1e100
+                or joker.ability.extra_value ~= cx_staple_sell_value()) then
+                joker.ability.extra_value = cx_staple_sell_value()
                 joker:set_cost()
             end
             joker.misprint_cost_fac = nil
@@ -1188,14 +1204,14 @@ function Card:add_to_deck(...)
         cx_mark_aleph_active('entity_added')
         self.ability.eternal = nil
         self:set_edition({cx_conceptual = true}, true)
-        self.ability.extra_value = 1e100
+        self.ability.extra_value = cx_staple_sell_value()
         self:set_cost()
         cx_set_aleph_scoring()
         CX_ALEPH_WATCHDOG('entity_added')
     elseif cx_is_creator_card(self) then
         self.ability.eternal = nil
         self:set_edition({cx_conceptual = true}, true)
-        self.ability.extra_value = 1e100
+        self.ability.extra_value = cx_staple_sell_value()
         self:set_cost()
     end
     return ret
@@ -1208,6 +1224,7 @@ function Card:set_cost(...)
     local ret = card_set_cost_ref(self, ...)
     if cx_is_entity_card(self) or cx_is_creator_card(self) then
         self.cost = 0
+        cx_fix_staple_sell_label(self)
     end
     return ret
 end
@@ -1221,6 +1238,7 @@ if card_set_cost_value_ref then
         local ret = card_set_cost_value_ref(self, ...)
         if cx_is_entity_card(self) or cx_is_creator_card(self) then
             self.cost = 0
+            cx_fix_staple_sell_label(self)
         end
         return ret
     end
@@ -2457,7 +2475,7 @@ G.FUNCS.cx_creator_confirm = function(e)
     play_sound('generic1')
 end
 
--- selling the Creator pays out (~1e100 via extra_value) but the Creator stays:
+-- selling the Creator pays out (infinite, via extra_value) but the Creator stays:
 -- the flag makes the start_dissolve wrapper swallow only the sell flow's
 -- dissolve, so the money lands and the card remains sellable again
 local card_sell_card_ref = Card.sell_card
