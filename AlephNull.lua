@@ -1800,6 +1800,9 @@ local function cx_creator_type_screen()
             }},
             {n = G.UIT.R, config = {align = "cm", padding = 0.1}, nodes = {
                 UIBox_button({label = {'Joker'}, button = 'cx_creator_open_joker', minw = 5, colour = G.C.RED})
+            }},
+            {n = G.UIT.R, config = {align = "cm", padding = 0.1}, nodes = {
+                UIBox_button({label = {'Voucher'}, button = 'cx_creator_open_voucher', minw = 5, colour = G.C.SECONDARY_SET.Voucher or G.C.ORANGE})
             }}
         }
     })
@@ -2016,11 +2019,39 @@ local function cx_creator_pick_joker(grid_card)
     play_sound('generic1')
 end
 
+local function cx_creator_pick_voucher(grid_card)
+    local center = cx_center(grid_card)
+    if not (center and center.key and G.play and G.vouchers) then return end
+    CX_CREATOR.grid_areas = nil
+    G.FUNCS.exit_overlay_menu()
+    discover_card(center)
+    -- mirror the shop flow (button_callbacks use_card): a real voucher card
+    -- redeems from G.play at zero cost, then dissolves; redeem() leaves
+    -- G.STATE parked on SMODS_REDEEM_VOUCHER, restoring it is the caller's job
+    local prev_state = G.STATE
+    local card = Card(G.play.T.x + G.play.T.w / 2 - G.CARD_W / 2, G.play.T.y, G.CARD_W, G.CARD_H, G.P_CARDS.empty, center)
+    card.cost = 0
+    G.play:emplace(card)
+    card:start_materialize({G.C.SECONDARY_SET.Voucher})
+    card:redeem()
+    G.E_MANAGER:add_event(Event({trigger = 'after', delay = 0.2, func = function()
+        card:start_dissolve()
+        G.E_MANAGER:add_event(Event({trigger = 'after', delay = 0.1, func = function()
+            G.STATE = prev_state
+            return true
+        end}))
+        return true
+    end}))
+end
+
 -- grid cards are chosen by clicking the card itself
 local card_click_ref = Card.click
 function Card:click()
     if self.cx_creator_pick == 'joker' then
         cx_creator_pick_joker(self)
+        return
+    elseif self.cx_creator_pick == 'voucher' then
+        cx_creator_pick_voucher(self)
         return
     elseif self.cx_creator_pick then
         cx_creator_pick_consumable(self)
@@ -2243,6 +2274,121 @@ G.FUNCS.cx_creator_jk_sticker = function(args)
             if sk ~= 'none' then card.ability[sk] = true end
         end
     end
+end
+
+-- voucher picker: paged grid like the consumables plus a source filter for
+-- big modded pools; no edition/sticker cycles, they do nothing on vouchers.
+-- picking redeems on the spot, free -- re-picking a redeemed voucher stacks
+-- its effect again, which is exactly the Creator's brand of fair
+local function cx_creator_vc_build()
+    local vc = CX_CREATOR.vc
+    vc.sources = {'any'}
+    local seen = {}
+    for _, c in ipairs(G.P_CENTER_POOLS.Voucher) do
+        local s = (c.mod and c.mod.name) or 'Base Game'
+        if not seen[s] then seen[s] = true; vc.sources[#vc.sources + 1] = s end
+    end
+    vc.pool = {}
+    local want = vc.sources[vc.source_i] or 'any'
+    for _, c in ipairs(G.P_CENTER_POOLS.Voucher) do
+        if want == 'any' or ((c.mod and c.mod.name) or 'Base Game') == want then
+            vc.pool[#vc.pool + 1] = c
+        end
+    end
+end
+
+local function cx_creator_fill_voucher_grid()
+    local d = CX_CREATOR
+    if not (d.grid_areas and d.vc and d.vc.pool) then return end
+    local vc = d.vc
+    local per_page = CX_CREATOR_GRID_ROWS * CX_CREATOR_GRID_COLS
+    local cw, ch = CX_CREATOR_UI_SCALE * G.CARD_W, CX_CREATOR_UI_SCALE * G.CARD_H
+    for j = 1, #d.grid_areas do
+        local area = d.grid_areas[j]
+        for i = #area.cards, 1, -1 do
+            local c = area:remove_card(area.cards[i])
+            if c then c:remove() end
+        end
+    end
+    for i = 1, CX_CREATOR_GRID_COLS do
+        for j = 1, #d.grid_areas do
+            local center = vc.pool[i + (j - 1) * CX_CREATOR_GRID_COLS + per_page * ((vc.page or 1) - 1)]
+            if center then
+                local area = d.grid_areas[j]
+                local card = Card(area.T.x + area.T.w / 2, area.T.y, cw, ch, G.P_CARDS.empty, center)
+                card.bypass_discovery_center = true
+                card.bypass_discovery_ui = true
+                card.cx_creator_preview = true
+                card.cx_creator_pick = 'voucher'
+                area:emplace(card)
+            end
+        end
+    end
+end
+
+local function cx_creator_voucher_screen(reset)
+    local d = CX_CREATOR
+    if reset or not d.vc then d.vc = {source_i = 1} end
+    local vc = d.vc
+    vc.page = 1
+    cx_creator_vc_build()
+
+    d.grid_areas = {}
+    local per_page = CX_CREATOR_GRID_ROWS * CX_CREATOR_GRID_COLS
+    local pages = math.max(1, math.ceil(#vc.pool / per_page))
+    local cw, ch = CX_CREATOR_UI_SCALE * G.CARD_W, CX_CREATOR_UI_SCALE * G.CARD_H
+    local area_rows = {}
+    for j = 1, CX_CREATOR_GRID_ROWS do
+        d.grid_areas[j] = CardArea(
+            G.ROOM.T.x + 0.2 * G.ROOM.T.w / 2, G.ROOM.T.h,
+            (CX_CREATOR_GRID_COLS + 0.25) * cw, 1.05 * ch,
+            {card_limit = CX_CREATOR_GRID_COLS, type = 'title', highlight_limit = 0, collection = true})
+        area_rows[#area_rows + 1] = {n = G.UIT.R, config = {align = "cm", padding = 0.05, no_fill = true}, nodes = {
+            {n = G.UIT.O, config = {object = d.grid_areas[j]}}
+        }}
+    end
+    cx_creator_fill_voucher_grid()
+
+    local page_options = {}
+    for i = 1, pages do page_options[#page_options + 1] = localize('k_page') .. ' ' .. i .. '/' .. pages end
+    local source_labels = {}
+    for _, s in ipairs(vc.sources) do source_labels[#source_labels + 1] = (s == 'any') and 'Any Source' or s end
+
+    return create_UIBox_generic_options({
+        back_func = 'cx_creator_back_to_type',
+        contents = {
+            {n = G.UIT.R, config = {align = "cm", padding = 0.03}, nodes = {
+                {n = G.UIT.T, config = {text = 'Click a Voucher to redeem it', scale = 0.4, colour = G.C.UI.TEXT_LIGHT, shadow = true}}
+            }},
+            {n = G.UIT.R, config = {align = "cm", r = 0.1, colour = G.C.BLACK, emboss = 0.05}, nodes = area_rows},
+            {n = G.UIT.R, config = {align = "cm", padding = 0.03}, nodes = {
+                {n = G.UIT.C, config = {align = "cm", padding = 0.04}, nodes = {
+                    create_option_cycle({options = page_options, current_option = vc.page, opt_callback = 'cx_creator_vc_page', w = 3.4, scale = 0.85, colour = G.C.RED, no_pips = true})
+                }},
+                {n = G.UIT.C, config = {align = "cm", padding = 0.04}, nodes = {
+                    create_option_cycle({options = source_labels, current_option = vc.source_i, opt_callback = 'cx_creator_vc_source', w = 3.4, scale = 0.85, colour = G.C.BLUE, no_pips = true})
+                }}
+            }}
+        }
+    })
+end
+
+G.FUNCS.cx_creator_open_voucher = function(e)
+    G.FUNCS.overlay_menu{definition = cx_creator_voucher_screen(true)}
+end
+
+G.FUNCS.cx_creator_vc_page = function(args)
+    if not (args and args.cycle_config and CX_CREATOR.vc) then return end
+    CX_CREATOR.vc.page = args.cycle_config.current_option
+    cx_creator_fill_voucher_grid()
+end
+
+-- source changes rebuild the screen: the page cycle's option list depends on
+-- the filtered pool size (same pattern as the joker filters)
+G.FUNCS.cx_creator_vc_source = function(args)
+    if not (args and args.cycle_config and CX_CREATOR.vc) then return end
+    CX_CREATOR.vc.source_i = args.cycle_config.current_option
+    G.FUNCS.overlay_menu{definition = cx_creator_voucher_screen()}
 end
 
 G.FUNCS.can_cx_create = function(e)
