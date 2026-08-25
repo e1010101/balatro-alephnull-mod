@@ -1786,7 +1786,10 @@ SMODS.Joker {
     immune_to_vermillion = true,
     cx_successor = true,
     atlas = 'successor',
-    soul_pos = { x = 1, y = 0, draw = cx_successor_soul_draw },
+    -- x = 2: frame {1,0} is an empty gutter. Adjacent frames bleed into each
+    -- other under bilinear filtering, and the base's inked right border was
+    -- ghosting onto the arrows layer's left edge as a floating card outline
+    soul_pos = { x = 2, y = 0, draw = cx_successor_soul_draw },
     calculate = function(self, card, context)
         if not card.added_to_deck then return end
         if context.joker_main then
