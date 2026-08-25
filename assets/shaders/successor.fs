@@ -106,9 +106,12 @@ vec4 effect( vec4 colour, Image texture, vec2 texture_coords, vec2 screen_coords
     wuv += (vec2(hash21(cellId + vec2(btick, 1.7)),
                  hash21(cellId + vec2(btick, 4.3))) - 0.5) * 0.11 * gate;
 
-    // planar ink wobble — crossed travelling waves, nothing radiates
-    wuv += 0.007 * vec2(sin(uv.y*13.0 + 1.9*T) + 0.6*sin(uv.y*29.0 - 1.3*T),
-                        sin(uv.x*11.0 - 1.6*T) + 0.6*sin(uv.x*23.0 + 2.1*T));
+    // hand-drawn line boil — per-pixel jitter re-rolled ~12x/sec, like ink
+    // redrawn frame by frame. (The previous crossed travelling waves moved
+    // the whole sheet coherently, which read as a flat pane.)
+    number boil = floor(T * 1.2);
+    wuv += (vec2(hash21(floor(uv*60.0) + vec2(boil, 3.3)),
+                 hash21(floor(uv*60.0) + vec2(boil, 6.6))) - 0.5) * 0.004;
 
     // fast row tears on 2px rows
     number tick = floor(T*16.0);
@@ -123,7 +126,9 @@ vec4 effect( vec4 colour, Image texture, vec2 texture_coords, vec2 screen_coords
     vec2 cdir = normalize(vec2(hash21(cellId + vec2(btick, 8.2)) - 0.5,
                                hash21(cellId + vec2(btick, 2.9)) - 0.5) + vec2(0.001));
     vec2 ab_dir = normalize(mix(gdir, cdir, gate));
-    number ab_amt = 0.010 + 0.055*depth + 0.060*burst + 0.006*sin(2.4*T + successor.x);
+    // no resting split: a permanent faint double image reads as a flat ghost
+    // pane on the arrows' plane. Crisp ink at rest; hard splits on events only.
+    number ab_amt = 0.002 + 0.055*depth + 0.060*burst;
     vec4 sR = Texel(texture, frame_uv(wuv + ab_amt*ab_dir));
     vec4 sC = Texel(texture, frame_uv(wuv));
     vec4 sB = Texel(texture, frame_uv(wuv - ab_amt*ab_dir));
