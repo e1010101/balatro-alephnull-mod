@@ -76,9 +76,13 @@ vec3 hue_rotate(vec3 c, number a)
     return c*ca + cross(k, c)*sa + k*dot(k, c)*(1.0 - ca);
 }
 
-// entity.fs with the glitch machinery cranked an order of magnitude for the
-// Successor's arrows: bursts most ticks instead of rarely, wider row tears on
-// thinner rows, far heavier chromatic aberration, more negative flashes
+// Heavy glitch for the Successor's arrows. Deliberately NO polar terms: the
+// first version reused entity.fs's radial breathing/hue/pulse, and at cranked
+// amplitude those sin(rad)/sin(ang) fields read as a regular floral mandala
+// radiating from the card centre. This one is built on a staggered block
+// lattice instead — individual bricks pop toward the viewer (zoom toward
+// their own centre + catch light), shove sideways, and channel-split on their
+// own axes, so the glitch is chunky and spatial rather than a flat warped pane.
 vec4 effect( vec4 colour, Image texture, vec2 texture_coords, vec2 screen_coords )
 {
     vec2 uv = (((texture_coords)*(image_details)) - texture_details.xy*texture_details.ba)/texture_details.ba;
@@ -86,53 +90,70 @@ vec4 effect( vec4 colour, Image texture, vec2 texture_coords, vec2 screen_coords
     number T = cx_time * 10.0;
     number seed = time * 0.001;
 
-    vec2 cuv = uv - 0.5;
-    number rad = length(cuv);
-    number ang = atan(cuv.y, cuv.x + 0.0001);
+    // staggered brick lattice on its own clock (brick rows so no regular mesh)
+    number btick = floor(T * 2.5);
+    number rowi = floor(uv.y * 9.0);
+    number stag = hash21(vec2(rowi, 5.1));
+    number colf = uv.x * 6.0 + stag;
+    vec2 cellId = vec2(floor(colf), rowi);
+    number ch = hash21(cellId + vec2(btick, seed));
+    number gate = step(0.62, ch);
+    number depth = gate * (ch - 0.62) / 0.38;
+    vec2 cellCenter = vec2((floor(colf) + 0.5 - stag) / 6.0, (rowi + 0.5) / 9.0);
 
-    // reality "breathing" — tripled amplitude
-    number warp = 0.030*sin(7.0*rad - 2.2*T + seed) + 0.018*sin(5.0*ang + 1.6*T);
-    vec2 wuv = uv + warp * vec2(cos(ang), sin(ang));
+    // popped bricks zoom toward the viewer and shove in a random direction
+    vec2 wuv = mix(uv, cellCenter + (uv - cellCenter) * (1.0 - 0.24*depth), gate);
+    wuv += (vec2(hash21(cellId + vec2(btick, 1.7)),
+                 hash21(cellId + vec2(btick, 4.3))) - 0.5) * 0.11 * gate;
 
-    // glitch bursts — most ticks tear, on 2px rows, at 2.5x the shove
+    // planar ink wobble — crossed travelling waves, nothing radiates
+    wuv += 0.007 * vec2(sin(uv.y*13.0 + 1.9*T) + 0.6*sin(uv.y*29.0 - 1.3*T),
+                        sin(uv.x*11.0 - 1.6*T) + 0.6*sin(uv.x*23.0 + 2.1*T));
+
+    // fast row tears on 2px rows
     number tick = floor(T*16.0);
     number burst = step(0.35, hash21(vec2(tick, seed)));
     number row = floor(wuv.y * texture_details.a / 2.0);
     number rh = hash21(vec2(row, tick));
     wuv.x += burst * step(0.35, rh) * (rh - 0.675) * 0.90;
 
-    // chromatic aberration on a rotating axis — heavy enough to split the
-    // linework into visibly separated ink plates
-    number ab_amt = 0.018 + 0.040*rad + 0.100*burst + 0.010*sin(2.4*T + successor.x);
-    vec2 ab_dir = vec2(cos(0.8*T + successor.x*0.5), sin(0.8*T + successor.x*0.5));
+    // aberration: slow global axis, but popped bricks override it with their
+    // own random axis and a much larger split — separated ink plates per chunk
+    vec2 gdir = vec2(cos(0.8*T + successor.x*0.5), sin(0.8*T + successor.x*0.5));
+    vec2 cdir = normalize(vec2(hash21(cellId + vec2(btick, 8.2)) - 0.5,
+                               hash21(cellId + vec2(btick, 2.9)) - 0.5) + vec2(0.001));
+    vec2 ab_dir = normalize(mix(gdir, cdir, gate));
+    number ab_amt = 0.010 + 0.055*depth + 0.060*burst + 0.006*sin(2.4*T + successor.x);
     vec4 sR = Texel(texture, frame_uv(wuv + ab_amt*ab_dir));
     vec4 sC = Texel(texture, frame_uv(wuv));
     vec4 sB = Texel(texture, frame_uv(wuv - ab_amt*ab_dir));
     vec4 tex = vec4(sR.r, sC.g, sB.b, max(sC.a, 0.6*max(sR.a, sB.a)));
 
-    // iridescent hue drift, weighted by saturation so blacks/whites keep their identity
+    // hue drift: diagonal sweep + hard per-brick jump — no rings
     number mx = max(tex.r, max(tex.g, tex.b));
     number mn = min(tex.r, min(tex.g, tex.b));
     number sat_w = smoothstep(0.05, 0.30, mx - mn);
-    tex.rgb = mix(tex.rgb, hue_rotate(tex.rgb, 1.1*T + 4.0*rad - ang), sat_w);
+    tex.rgb = mix(tex.rgb, hue_rotate(tex.rgb, 1.1*T + 3.0*(uv.x - uv.y) + 6.28*ch*gate), sat_w);
 
-    // pulsing rgb rim glow around the silhouette
+    // pulsing rgb rim glow around the silhouette (phase runs on the diagonal)
     number px = 1.5 / texture_details.b;
     number py = 1.5 / texture_details.a;
     number a_n = min(min(Texel(texture, frame_uv(wuv + vec2(px, 0.))).a,
                          Texel(texture, frame_uv(wuv - vec2(px, 0.))).a),
                      min(Texel(texture, frame_uv(wuv + vec2(0., py))).a,
                          Texel(texture, frame_uv(wuv - vec2(0., py))).a));
-    number rim = clamp(sC.a - a_n, 0.0, 1.0) * (0.65 + 0.35*sin(3.1*T + ang*2.0));
+    number rim = clamp(sC.a - a_n, 0.0, 1.0) * (0.65 + 0.35*sin(3.1*T + (uv.x + uv.y)*6.0));
     vec3 rim_col = 0.5 + 0.5*vec3(sin(1.3*T), sin(1.3*T + 2.094), sin(1.3*T + 4.188));
     tex.rgb += rim * rim_col * 0.9;
     tex.a = max(tex.a, rim * 0.8);
 
-    // negative flash on most bursts
-    tex.rgb = mix(tex.rgb, vec3(1.0) - tex.rgb, burst * step(0.45, hash21(vec2(tick, 7.77))) * 0.9);
+    // negative flash: per popped brick often, whole frame rarely
+    tex.rgb = mix(tex.rgb, vec3(1.0) - tex.rgb, gate * step(0.75, hash21(cellId + vec2(btick, 7.7))) * 0.9);
+    tex.rgb = mix(tex.rgb, vec3(1.0) - tex.rgb, burst * step(0.85, hash21(vec2(tick, 7.77))) * 0.85);
 
-    // scanline shimmer + radial brightness pulse, both amplified
-    tex.rgb *= (0.90 + 0.10*sin(uv.y*90.0 + T*8.0)) * (1.0 + 0.12*sin(2.0*T + rad*6.0));
+    // popped bricks catch light; scanline shimmer stays; radial pulse is gone
+    tex.rgb *= 1.0 + 0.16*depth;
+    tex.rgb *= 0.90 + 0.10*sin(uv.y*90.0 + T*8.0);
 
     return dissolve_mask(tex*colour, texture_coords, uv);
 }
