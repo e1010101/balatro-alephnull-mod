@@ -11,29 +11,29 @@
 
 local conceptual = function(self, card, badges)
 	local scaling = 1.25
-	-- set_card_type_badge REPLACES the rarity badge row, so the Transfinite
-	-- badge must be re-added here or the rarity would never display. Pill
-	-- colour is the live G.C.color_rgb table (mutated in place every frame
-	-- by the Game:update hook), so the badge strobes like the '?????' text;
-	-- the static G.C.RARITY entry only covers frames before the first update.
-	badges[#badges + 1] = create_badge(localize('k_cx_transfinite'), G.C.color_rgb or G.C.RARITY.cx_transfinite, nil, scaling)
+	-- set_card_type_badge REPLACES the rarity badge row, so Transfinite must
+	-- be re-added here or the rarity would never display. It wears the manic
+	-- look (black pill, floating strobing cx_pop3d letters) that used to
+	-- belong to the '?????' placeholder badge, which said nothing and is gone.
 	badges[#badges + 1] = {n=G.UIT.R, config={align = "cm"}, nodes={
 		{n=G.UIT.R, config={align = "cm", colour = G.C.BLACK, r = 0.1, minw = 2, minh = 0.4*scaling, emboss = 0.05, padding = 0.03*scaling}, nodes={
 			{n=G.UIT.B, config={h=0.1,w=0.03}},
 			{n=G.UIT.O, config={object = DynaText({
-				string = {'?????'},
+				string = {localize('k_cx_transfinite')},
 				colours = {G.C.color_rgb},
 				text_effect = 'cx_pop3d',
 				float = true,
 				rotate = true,
 				bump = true,
 				-- random positional jitter lives in cx_pop3d's draw_letter
-				-- (engine quiver is rotation-based and just wags the ? tails);
-				-- colour flicker comes from color_rgb re-rolling every frame
+				-- (engine quiver is rotation-based and just wags letter tails);
+				-- colour flicker comes from color_rgb re-rolling every frame.
+				-- spacing 1 (the ????? badge used 2): eleven glyphs at spacing
+				-- 2 would stretch the pill wider than the popup
 				shadow = true,
 				offset_y = 0,
 				silent = true,
-				spacing = 2,
+				spacing = 1,
 				pop_in_rate = 9,
 				scale = 0.35*scaling
 			})}},
@@ -1332,6 +1332,17 @@ function Game:update(dt)
 
         self.C.color_rgb_HUE = (math.random(1, 360)) % 360
         G.ARGS.LOC_COLOURS.color_rgb = self.C.color_rgb
+
+        -- the Conceptual edition badge wears the strobing pill (white text on
+        -- the live colour table). The colour can't be declared on the edition
+        -- at load time — this table doesn't exist yet — so it's wired here,
+        -- and G.BADGE_COL is set directly because get_badge_colour caches
+        -- lookups and only lazily refills from the edition's badge_colour
+        local conceptual_center = G.P_CENTERS and G.P_CENTERS.e_cx_conceptual
+        if conceptual_center and conceptual_center.badge_colour ~= self.C.color_rgb then
+            conceptual_center.badge_colour = self.C.color_rgb
+            if G.BADGE_COL then G.BADGE_COL.cx_conceptual = self.C.color_rgb end
+        end
     end
 end
 
