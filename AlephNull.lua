@@ -1713,16 +1713,6 @@ SMODS.Joker {
     end
 }
 
--- entity.fs with every glitch knob cranked an order of magnitude, for the
--- Successor's floating arrows only (Entity/Creator souls keep the original)
-SMODS.Shader {
-    key = 'successor',
-    path = 'successor.fs',
-    send_vars = function(sprite, card)
-        return { cx_time = G.TIMERS.REAL }
-    end
-}
-
 -- fuzzy black-and-white old-TV treatment for the Successor's paper base:
 -- snow, scanlines, rolling band, tracking jitter, flicker, vignette
 SMODS.Shader {
@@ -1739,6 +1729,10 @@ SMODS.Shader {
 -- echoes (same-size dim copies at small offsets) read as a translucent flat
 -- pane sitting on the arrows' own plane, exactly the artefact this layering
 -- exists to avoid. Calm ascent: slow breathe, slight lean, gentle bob.
+-- The arrows wear the Entity's BASE shader (fractal shatter): its output
+-- alpha is gated by the sampled sprite alpha, so the voronoi shards render
+-- only inside the arrow silhouettes, the ink structure ghosts through the
+-- fractal via the luminance term, and its rim pulse traces each arrowhead.
 local function cx_successor_soul_draw(card, scale_mod, rotate_mod)
     local fs = card.children.floating_sprite
     if not fs then return end
@@ -1748,7 +1742,7 @@ local function cx_successor_soul_draw(card, scale_mod, rotate_mod)
     local bob = 0.012*math.sin(1.1*t)
     local send = card.ARGS and card.ARGS.send_to_shader
 
-    fs:draw_shader('cx_successor', nil, send, nil, card.children.center, s, r, 0, bob)
+    fs:draw_shader('cx_entity_fractal', nil, send, nil, card.children.center, s, r, 0, bob)
 end
 
 -- SUCCESSOR: climbs the whole hyperoperation ladder every scored hand, one
