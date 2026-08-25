@@ -514,6 +514,23 @@ local function cx_is_creator_card(card)
     return center and (center.cx_creator or center.key == 'j_cx_creator')
 end
 
+local function cx_is_successor_card(card)
+    local center = cx_center(card)
+    return center and (center.cx_successor or center.key == 'j_cx_successor')
+end
+
+local function cx_has_successor()
+    if not (G and G.jokers and G.jokers.cards) then
+        return false
+    end
+    for _, joker in ipairs(G.jokers.cards) do
+        if cx_is_successor_card(joker) then
+            return true
+        end
+    end
+    return false
+end
+
 local function cx_has_entity()
     if not (G and G.jokers and G.jokers.cards) then
         return false
@@ -664,7 +681,8 @@ local function cx_heal_staple_jokers()
         return
     end
     for _, joker in ipairs(G.jokers.cards) do
-        if cx_is_entity_card(joker) or cx_is_creator_card(joker) then
+        local pays_infinite = cx_is_entity_card(joker) or cx_is_creator_card(joker)
+        if pays_infinite or cx_is_successor_card(joker) then
             if joker.ability and joker.ability.eternal then
                 joker.ability.eternal = nil
             end
@@ -675,12 +693,45 @@ local function cx_heal_staple_jokers()
             -- blocks (misprintize wraps) is healed within a frame. The type
             -- check keeps the guard convergent if a big-number lib converted
             -- the value (plain ~= Big compares true forever in Lua 5.1).
-            if joker.ability and (type(joker.ability.extra_value) ~= 'number'
+            if pays_infinite and joker.ability and (type(joker.ability.extra_value) ~= 'number'
                 or joker.ability.extra_value ~= cx_staple_sell_value()) then
                 joker.ability.extra_value = cx_staple_sell_value()
                 joker:set_cost()
             end
             joker.misprint_cost_fac = nil
+        end
+    end
+end
+
+-- Successor's aura: every card everywhere is freed of its limitations, per
+-- frame — the same self-healing pattern as the conceptual sweeps. Negative
+-- stickers are an explicit list (not "everything but a whitelist") so
+-- protective modded stickers like Cryptid's absolute are never stripped.
+local CX_NEGATIVE_STICKERS = {'eternal', 'perishable', 'rental', 'pinned', 'banana', 'perma_debuff'}
+
+local function cx_successor_cleanse_card(card)
+    if not (card and card.ability) then return end
+    if card.debuff then
+        card:set_debuff(false)
+        card.debuffed_by_blind = false
+    end
+    for _, k in ipairs(CX_NEGATIVE_STICKERS) do
+        if card.ability[k] then card.ability[k] = nil end
+    end
+    if card.pinned then card.pinned = nil end
+end
+
+local function cx_successor_cleanse()
+    if not (G and G.STAGE == G.STAGES.RUN) then return end
+    if not cx_has_successor() then return end
+    -- indexed by name so a nil area (shop_jokers outside the shop, pack_cards
+    -- outside a booster) doesn't put a hole in the list and stop ipairs early
+    for _, name in ipairs({'jokers', 'consumeables', 'hand', 'deck', 'discard', 'play', 'shop_jokers', 'pack_cards'}) do
+        local area = G[name]
+        if area and area.cards then
+            for _, card in ipairs(area.cards) do
+                cx_successor_cleanse_card(card)
+            end
         end
     end
 end
@@ -693,6 +744,7 @@ end
 local CX_SHOP_STAPLES = {
     {key = 'j_cx_entity', is = cx_is_entity_card, pending = 'cx_entity_pending', conceptual = true},
     {key = 'j_cx_creator', is = cx_is_creator_card, pending = 'cx_creator_pending', conceptual = true},
+    {key = 'j_cx_successor', is = cx_is_successor_card, pending = 'cx_successor_pending', conceptual = true},
 }
 
 local function cx_is_staple_card(card)
@@ -982,6 +1034,7 @@ CX_ALEPH_WATCHDOG = function(reason)
     cx_heal_nan_state()
     cx_enforce_conceptual_editions()
     cx_heal_staple_jokers()
+    cx_successor_cleanse()
     cx_ensure_staples_in_shop()
     if cx_aleph_active() then
         cx_set_aleph_scoring()
@@ -1144,6 +1197,10 @@ function Card:set_debuff(should_debuff)
 	if ((self.config or {}).center or {}).cx_entity and should_debuff == true then
 		card_status_text(self, 'Immune', nil, 0.05*self.T.h, G.C.RED, nil, 0.6, nil, nil, 'bm', 'cancel')
         return false
+	elseif should_debuff == true and cx_has_successor() then
+		-- Successor's aura: nothing can be debuffed. No popup — boss blinds
+		-- re-attempt this for whole hands at once and would spam it.
+		csdr(self, false)
 	else
 		csdr(self, should_debuff)
 	end
@@ -1156,7 +1213,7 @@ end
 local function cx_card_is_unmodifiable(card)
     if not card then return false end
     if card.edition and card.edition.cx_conceptual then return true end
-    return cx_is_entity_card(card) or cx_is_creator_card(card)
+    return cx_is_entity_card(card) or cx_is_creator_card(card) or cx_is_successor_card(card)
 end
 
 if Cryptid then
@@ -1219,6 +1276,10 @@ function Card:add_to_deck(...)
         self:set_edition({cx_conceptual = true}, true)
         self.ability.extra_value = cx_staple_sell_value()
         self:set_cost()
+    elseif cx_is_successor_card(self) then
+        self.ability.eternal = nil
+        self:set_edition({cx_conceptual = true}, true)
+        self:set_cost()
     end
     return ret
 end
@@ -1228,7 +1289,7 @@ end
 local card_set_cost_ref = Card.set_cost
 function Card:set_cost(...)
     local ret = card_set_cost_ref(self, ...)
-    if cx_is_entity_card(self) or cx_is_creator_card(self) then
+    if cx_is_entity_card(self) or cx_is_creator_card(self) or cx_is_successor_card(self) then
         self.cost = 0
         cx_fix_staple_sell_label(self)
     end
@@ -1242,7 +1303,7 @@ local card_set_cost_value_ref = Card.set_cost_value
 if card_set_cost_value_ref then
     function Card:set_cost_value(...)
         local ret = card_set_cost_value_ref(self, ...)
-        if cx_is_entity_card(self) or cx_is_creator_card(self) then
+        if cx_is_entity_card(self) or cx_is_creator_card(self) or cx_is_successor_card(self) then
             self.cost = 0
             cx_fix_staple_sell_label(self)
         end
@@ -1500,6 +1561,13 @@ SMODS.Atlas {
     py = 95
 }
 
+SMODS.Atlas {
+    key = "successor",
+    path = "j_cx_successor.png",
+    px = 71,
+    py = 95
+}
+
 -- DECK ATLASES
 SMODS.Atlas {
     key = "atlasdeck",
@@ -1628,6 +1696,52 @@ SMODS.Joker {
                 cx_card_speak(card, 'Instawin!', G.C.color_rgb)
                 cx_force_blind_win('entity_setting_blind', true)
             end
+        end
+    end
+}
+
+-- SUCCESSOR: climbs the whole hyperoperation ladder every scored hand, one
+-- rung per popup, ending at the same 1e9-arrow ceiling as Aleph scoring. The
+-- e/ee/eee/hyper rungs are amulet's Talisman effect keys — without a
+-- big-number lib SMODS never reads those keys and the cascade degrades to
+-- its +100/X100 rungs. The debuff/sticker aura lives in cx_successor_cleanse
+-- and the set_debuff wrapper.
+SMODS.Joker {
+    key = 'successor',
+    loc_txt = {
+        name = 'Successor',
+        text = {
+            'Every scored hand climbs the whole ladder:',
+            '{C:color_rgb}+100{}, {C:color_rgb}X100{}, {C:color_rgb}^100{}, {C:color_rgb}^^100{}, {C:color_rgb}^^^100{},',
+            'then {C:color_rgb}1e9 arrows{} of 100, each to {C:chips}Chips{} and {C:mult}Mult{}',
+            '{C:color_rgb}Removes and prevents{} debuffs and',
+            'negative stickers on {C:attention}every card{}'
+        }
+    },
+    pos = { x = 0, y = 0 },
+    set_card_type_badge = conceptual,
+    no_doe = true,
+    cost = 0,
+    rarity = 'cx_transfinite',
+    unlocked = true,
+    discovered = true,
+    blueprint_compat = true,
+    eternal_compat = false,
+    perishable_compat = false,
+    immune_to_vermillion = true,
+    cx_successor = true,
+    atlas = 'successor',
+    calculate = function(self, card, context)
+        if not card.added_to_deck then return end
+        if context.joker_main then
+            return {
+                chips = 100, mult = 100,
+                extra = { x_chips = 100, x_mult = 100,
+                extra = { e_chips = 100, e_mult = 100,
+                extra = { ee_chips = 100, ee_mult = 100,
+                extra = { eee_chips = 100, eee_mult = 100,
+                extra = { hyper_chips = {ALEPH_OPERATOR, 100}, hyper_mult = {ALEPH_OPERATOR, 100} } } } } }
+            }
         end
     end
 }
