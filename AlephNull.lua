@@ -1711,6 +1711,34 @@ SMODS.Joker {
     end
 }
 
+local cx_successor_echo_colour = {1, 1, 1, 0.3}
+
+-- The arrows' printed shadows live on the card base frame, so the floating
+-- layer casts none of its own — the parallax between the fixed shadows and
+-- the hovering arrows IS the 3-D effect. Calm ascent (no Entity mania):
+-- slow breathe, slight lean, and two afterimages trailing below like an
+-- upward motion blur. The entity glitch shader's chromatic aberration reads
+-- as print misregistration on the ink linework.
+local function cx_successor_soul_draw(card, scale_mod, rotate_mod)
+    local fs = card.children.floating_sprite
+    if not fs then return end
+    local t = G.TIMERS.REAL
+    local s = 0.06 + 0.025*math.sin(0.8*t)
+    local r = 0.035*math.sin(0.5*t + 0.7)
+    local bob = 0.012*math.sin(1.1*t)
+    local send = card.ARGS and card.ARGS.send_to_shader
+
+    for i = 2, 1, -1 do
+        cx_successor_echo_colour[4] = 0.26 - 0.09*i
+        fs.drawing_colour = cx_successor_echo_colour
+        fs:draw_shader('cx_entity', nil, send, nil, card.children.center,
+            s, r, 0.004*i*math.sin(0.9*t + i), 0.020*i + bob)
+    end
+    fs.drawing_colour = nil
+
+    fs:draw_shader('cx_entity', nil, send, nil, card.children.center, s, r, 0, bob)
+end
+
 -- SUCCESSOR: climbs the whole hyperoperation ladder every scored hand, one
 -- rung per popup, ending at the same 1e9-arrow ceiling as Aleph scoring. The
 -- e/ee/eee/hyper rungs are amulet's Talisman effect keys — without a
@@ -1742,6 +1770,7 @@ SMODS.Joker {
     immune_to_vermillion = true,
     cx_successor = true,
     atlas = 'successor',
+    soul_pos = { x = 1, y = 0, draw = cx_successor_soul_draw },
     calculate = function(self, card, context)
         if not card.added_to_deck then return end
         if context.joker_main then
