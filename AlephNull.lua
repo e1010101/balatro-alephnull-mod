@@ -1495,7 +1495,7 @@ SMODS.DrawStep {
     key = 'cx_entity_base',
     order = 25,
     func = function(self)
-        if (self.config.center.cx_entity or self.config.center.cx_creator)
+        if (self.config.center.cx_entity or self.config.center.cx_creator or self.config.center.cx_successor)
             and (self.config.center.discovered or self.bypass_discovery_center) then
             local t = G.TIMERS.REAL
             local sp = self.shadow_parrallax
@@ -1506,9 +1506,11 @@ SMODS.DrawStep {
             local step = 0.02 + 0.018*amp
             local fx, fy = -1.2*step*nx, -1.2*step*ny
 
-            -- entity: fractal shatter base; creator: hypnotic glitch base
+            -- entity: fractal shatter; creator: hypnotic glitch; successor: old-TV static
             self.children.center:draw_shader(
-                self.config.center.cx_creator and 'cx_creator_base' or 'cx_entity_fractal',
+                self.config.center.cx_creator and 'cx_creator_base'
+                or self.config.center.cx_successor and 'cx_successor_base'
+                or 'cx_entity_fractal',
                 nil, self.ARGS.send_to_shader)
 
             local letters = self.children.cx_letters
@@ -1711,14 +1713,34 @@ SMODS.Joker {
     end
 }
 
+-- entity.fs with every glitch knob cranked an order of magnitude, for the
+-- Successor's floating arrows only (Entity/Creator souls keep the original)
+SMODS.Shader {
+    key = 'successor',
+    path = 'successor.fs',
+    send_vars = function(sprite, card)
+        return { cx_time = G.TIMERS.REAL }
+    end
+}
+
+-- fuzzy black-and-white old-TV treatment for the Successor's paper base:
+-- snow, scanlines, rolling band, tracking jitter, flicker, vignette
+SMODS.Shader {
+    key = 'successor_base',
+    path = 'successor_base.fs',
+    send_vars = function(sprite, card)
+        return { cx_time = G.TIMERS.REAL }
+    end
+}
+
 local cx_successor_echo_colour = {1, 1, 1, 0.3}
 
 -- The arrows' printed shadows live on the card base frame, so the floating
 -- layer casts none of its own — the parallax between the fixed shadows and
 -- the hovering arrows IS the 3-D effect. Calm ascent (no Entity mania):
 -- slow breathe, slight lean, and two afterimages trailing below like an
--- upward motion blur. The entity glitch shader's chromatic aberration reads
--- as print misregistration on the ink linework.
+-- upward motion blur. The cranked cx_successor glitch shader's chromatic
+-- aberration reads as violent print misregistration on the ink linework.
 local function cx_successor_soul_draw(card, scale_mod, rotate_mod)
     local fs = card.children.floating_sprite
     if not fs then return end
@@ -1731,12 +1753,12 @@ local function cx_successor_soul_draw(card, scale_mod, rotate_mod)
     for i = 2, 1, -1 do
         cx_successor_echo_colour[4] = 0.26 - 0.09*i
         fs.drawing_colour = cx_successor_echo_colour
-        fs:draw_shader('cx_entity', nil, send, nil, card.children.center,
+        fs:draw_shader('cx_successor', nil, send, nil, card.children.center,
             s, r, 0.004*i*math.sin(0.9*t + i), 0.020*i + bob)
     end
     fs.drawing_colour = nil
 
-    fs:draw_shader('cx_entity', nil, send, nil, card.children.center, s, r, 0, bob)
+    fs:draw_shader('cx_successor', nil, send, nil, card.children.center, s, r, 0, bob)
 end
 
 -- SUCCESSOR: climbs the whole hyperoperation ladder every scored hand, one
