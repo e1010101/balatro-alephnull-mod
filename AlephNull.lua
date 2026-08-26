@@ -681,8 +681,7 @@ local function cx_heal_staple_jokers()
         return
     end
     for _, joker in ipairs(G.jokers.cards) do
-        local pays_infinite = cx_is_entity_card(joker) or cx_is_creator_card(joker)
-        if pays_infinite or cx_is_successor_card(joker) then
+        if cx_is_entity_card(joker) or cx_is_creator_card(joker) or cx_is_successor_card(joker) then
             if joker.ability and joker.ability.eternal then
                 joker.ability.eternal = nil
             end
@@ -693,7 +692,7 @@ local function cx_heal_staple_jokers()
             -- blocks (misprintize wraps) is healed within a frame. The type
             -- check keeps the guard convergent if a big-number lib converted
             -- the value (plain ~= Big compares true forever in Lua 5.1).
-            if pays_infinite and joker.ability and (type(joker.ability.extra_value) ~= 'number'
+            if joker.ability and (type(joker.ability.extra_value) ~= 'number'
                 or joker.ability.extra_value ~= cx_staple_sell_value()) then
                 joker.ability.extra_value = cx_staple_sell_value()
                 joker:set_cost()
@@ -1279,6 +1278,7 @@ function Card:add_to_deck(...)
     elseif cx_is_successor_card(self) then
         self.ability.eternal = nil
         self:set_edition({cx_conceptual = true}, true)
+        self.ability.extra_value = cx_staple_sell_value()
         self:set_cost()
     end
     return ret

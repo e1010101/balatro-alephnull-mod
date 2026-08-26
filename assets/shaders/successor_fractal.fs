@@ -139,7 +139,11 @@ vec4 effect( vec4 colour, Image texture, vec2 texture_coords, vec2 screen_coords
     // produces the fully-saturated rainbow edge — the "pure RGB" look.
     // Saturation and value get their own independently drifting fields, so
     // pastels, muted tones, deep shades and vivid hues all coexist.
-    number hue = acc*0.65 + uv.y*0.55 - uv.x*0.35 + 0.065*CT + shard_rand*0.6;
+    // acc*1.6: one arm gradient sweeps multiple full rainbows. The sine
+    // interference grid scatters extra hue WITHIN arms — many hues in view
+    // at once, not one colour family per vortex.
+    number hue = acc*1.6 + uv.y*0.55 - uv.x*0.35 + 0.065*CT + shard_rand*0.6
+               + 0.22*sin(uv.x*37.0 + 0.9*CT)*sin(uv.y*29.0 - 0.7*CT);
     number sat = 0.40 + 0.58*(0.5 + 0.5*sin(6.2831*(acc*0.37 + 2.7*shard_rand + 0.021*CT)));
     number val = 0.62 + 0.38*(0.5 + 0.5*sin(6.2831*(acc*0.23 + uv.x*0.45 + 3.3*shard_rand + 0.017*CT)));
     vec3 col = hsv2rgb(fract(hue), sat, val);
