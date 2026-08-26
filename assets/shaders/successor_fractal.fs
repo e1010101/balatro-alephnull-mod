@@ -86,13 +86,17 @@ vec4 effect( vec4 colour, Image texture, vec2 texture_coords, vec2 screen_coords
     number aspect = texture_details.b / max(texture_details.a, 1.0);
     vec4 base = Texel(texture, frame_uv(uv));
 
-    // --- voronoi shatter: the base is broken into slowly swimming glass shards
-    vec2 vp = vec2(uv.x * aspect, uv.y) * 6.0;
+    // --- vortex field: swimming spiral centres on a jittered grid (voronoi
+    // basins kept for the ids/edges, but each basin now hosts a spiral
+    // instead of a kali-fractal shard). Deliberately multi-centre so nothing
+    // reads as radiating from the card's middle.
+    vec2 vp = vec2(uv.x * aspect, uv.y) * 3.5;
     vec2 n = floor(vp);
     vec2 f = fract(vp);
     number f1 = 8.0;
     number f2 = 8.0;
     vec2 id = vec2(0.0);
+    vec2 mr = vec2(0.0);
     for (int j = -1; j <= 1; j++) {
         for (int i = -1; i <= 1; i++) {
             vec2 g = vec2(float(i), float(j));
@@ -100,7 +104,7 @@ vec4 effect( vec4 colour, Image texture, vec2 texture_coords, vec2 screen_coords
             o = 0.5 + 0.4*sin(0.6*T + 6.2831*o + successor_fractal.x*0.3);
             vec2 r = g + o - f;
             number d = dot(r, r);
-            if (d < f1) { f2 = f1; f1 = d; id = n + g; }
+            if (d < f1) { f2 = f1; f1 = d; id = n + g; mr = r; }
             else if (d < f2) { f2 = d; }
         }
     }
@@ -109,18 +113,16 @@ vec4 effect( vec4 colour, Image texture, vec2 texture_coords, vec2 screen_coords
     number edge = f2 - f1;
     number shard_rand = hash21(id);
 
-    // --- each shard samples the fractal from a displaced origin → fragmented discontinuities
-    vec2 shard_off = (hash22(id + 7.7) - 0.5) * (0.10 + 0.06*sin(0.9*T + shard_rand*6.2831));
-    vec2 p = (vec2(uv.x*aspect, uv.y) - 0.5*vec2(aspect, 1.0) + shard_off) * (2.4 + 0.5*sin(0.17*T));
-
-    // --- kali fractal (iterated fold): flowing filaments, constants morph over time
-    vec2 c = vec2(0.84 + 0.16*sin(0.31*T + shard_rand), 0.60 + 0.20*cos(0.23*T));
-    number acc = 0.0;
-    for (int k = 0; k < 6; k++) {
-        p = abs(p) / max(dot(p, p), 0.0001) - c;
-        acc += exp(-1.6*length(p));
-    }
-    acc = acc / 3.0;
+    // --- the spiral: log-spiral ink arms winding into the basin's swimming
+    // centre. Arm count, spin rate and handedness are per-vortex; arms
+    // sharpen via pow and brighten toward a hot core.
+    number arms = 2.0 + floor(shard_rand * 3.0);
+    number dir = hash21(id + 3.3) > 0.5 ? 1.0 : -1.0;
+    number spin = T * dir * (0.5 + 0.7*shard_rand);
+    number va = atan(mr.y, mr.x + 0.0001);
+    number band = 0.5 + 0.5*sin(arms*va - 7.0*log(f1 + 0.06) + spin);
+    number acc = pow(band, 3.0) * (0.45 + 0.9*exp(-2.2*f1));
+    acc += 0.8*exp(-8.0*f1);
 
     // --- ever-shifting gradient colouring (CT: colour clock runs 5x the pattern clock)
     number CT = T * 5.0;
