@@ -1757,8 +1757,13 @@ local function cx_successor_soul_draw(card, scale_mod, rotate_mod)
     fs:draw_shader('cx_successor_fractal', nil, send, nil, card.children.center, s, r, 0, bob)
 end
 
+-- the top of the ladder: the largest finite arrow count amulet can hold.
+-- Big:arrow collapses to literal Infinity past R.MAX_VALUE (~1.797e308),
+-- so 1e308 is the last stop before the number line ends
+local CX_SUCCESSOR_TOP = 1e308
+
 -- SUCCESSOR: climbs the whole hyperoperation ladder every scored hand, one
--- rung per popup, ending at the same 1e9-arrow ceiling as Aleph scoring. The
+-- rung per popup, ending at the library's finite ceiling (1e308 arrows). The
 -- e/ee/eee/hyper rungs are amulet's Talisman effect keys — without a
 -- big-number lib SMODS never reads those keys and the cascade degrades to
 -- its +100/X100 rungs. The debuff/sticker aura lives in cx_successor_cleanse
@@ -1770,7 +1775,7 @@ SMODS.Joker {
         text = {
             'Every scored hand climbs the whole ladder:',
             '{C:color_rgb}+100{}, {C:color_rgb}X100{}, {C:color_rgb}^100{}, {C:color_rgb}^^100{}, {C:color_rgb}^^^100{},',
-            'then {C:color_rgb}1e9 arrows{} of 100, each to {C:chips}Chips{} and {C:mult}Mult{}',
+            'then {C:color_rgb}1e308 arrows{} of 100, each to {C:chips}Chips{} and {C:mult}Mult{}',
             '{C:color_rgb}Removes and prevents{} debuffs and',
             'negative stickers on {C:attention}every card{}'
         }
@@ -1802,7 +1807,7 @@ SMODS.Joker {
                 extra = { e_chips = 100, e_mult = 100,
                 extra = { ee_chips = 100, ee_mult = 100,
                 extra = { eee_chips = 100, eee_mult = 100,
-                extra = { hyper_chips = {ALEPH_OPERATOR, 100}, hyper_mult = {ALEPH_OPERATOR, 100} } } } } }
+                extra = { hyper_chips = {CX_SUCCESSOR_TOP, 100}, hyper_mult = {CX_SUCCESSOR_TOP, 100} } } } } }
             }
         end
     end
