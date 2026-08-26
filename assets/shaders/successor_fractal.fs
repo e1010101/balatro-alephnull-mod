@@ -72,10 +72,19 @@ vec2 hash22(vec2 p)
     return fract(sin(p) * 43758.5453);
 }
 
-// cosine gradient — phases drift with time so the palette never stops moving
+// full-spectrum hue wheel. The old cosine palette plus the 1.45 saturation
+// overdrive collapsed colours to the gamut corners — everything read as pure
+// R/G/B. This walks the whole rainbow smoothly; 0.31 slows the traversal so
+// arms show broad spectral gradients instead of tight candy stripes.
+vec3 hsv2rgb(number h, number s, number v)
+{
+    vec3 p = abs(fract(vec3(h) + vec3(0.0, 0.6666667, 0.3333333)) * 6.0 - 3.0);
+    return v * mix(vec3(1.0), clamp(p - vec3(1.0), 0.0, 1.0), s);
+}
+
 vec3 palette(number t, number shift)
 {
-    return 0.5 + 0.5*cos(6.28318*(vec3(1.0, 0.92, 1.08)*t + vec3(0.00, 0.33, 0.67) + shift));
+    return hsv2rgb(fract(t*0.31 + shift), 0.88, 1.0);
 }
 
 vec4 effect( vec4 colour, Image texture, vec2 texture_coords, vec2 screen_coords )
@@ -153,9 +162,10 @@ vec4 effect( vec4 colour, Image texture, vec2 texture_coords, vec2 screen_coords
     number rim = clamp(base.a - a_n, 0.0, 1.0) * (0.6 + 0.4*sin(2.7*T + uv.y*6.0));
     col += rim * palette(0.2 + 0.11*CT, 0.6) * 1.2;
 
-    // saturation push — vivid, near-flashing colour
+    // barely-there saturation trim — the hue wheel is already fully saturated;
+    // overdriving here is what crushed the spectrum to R/G/B corners before
     number cl = dot(col, vec3(0.299, 0.587, 0.114));
-    col = mix(vec3(cl), col, 1.45);
+    col = mix(vec3(cl), col, 1.05);
 
     // negative: clamp then invert — ink outlines flare bright, glow becomes shadow
     col = vec3(1.0) - clamp(col, 0.0, 1.0);
