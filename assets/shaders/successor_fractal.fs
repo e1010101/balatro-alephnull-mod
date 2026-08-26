@@ -84,7 +84,7 @@ vec3 hsv2rgb(number h, number s, number v)
 
 vec3 palette(number t, number shift)
 {
-    return hsv2rgb(fract(t*0.31 + shift), 0.88, 1.0);
+    return hsv2rgb(fract(t*0.5 + shift), 0.95, 1.0);
 }
 
 vec4 effect( vec4 colour, Image texture, vec2 texture_coords, vec2 screen_coords )
@@ -135,7 +135,9 @@ vec4 effect( vec4 colour, Image texture, vec2 texture_coords, vec2 screen_coords
 
     // --- ever-shifting gradient colouring (CT: colour clock runs 5x the pattern clock)
     number CT = T * 5.0;
-    vec3 col = palette(acc*1.3 + uv.y*0.5 - uv.x*0.3 + 0.13*CT, 0.045*CT + shard_rand*0.35);
+    // strong diagonal hue sweep + a big per-vortex hue offset: neighbouring
+    // whirlpools live in visibly different colour families
+    vec3 col = palette(acc*1.3 + uv.y*1.1 - uv.x*0.7 + 0.13*CT, 0.045*CT + shard_rand*0.6);
     col += palette(acc*0.5 + 0.07*CT, 0.5 + 0.03*CT) * acc * 0.6;
 
     // --- glowing cracks between shards

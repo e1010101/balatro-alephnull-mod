@@ -1593,9 +1593,11 @@ SMODS.Atlas {
 local set_spritesref = Card.set_sprites
 function Card:set_sprites(_center, _front)
 	set_spritesref(self, _center, _front)
-	if _center and (_center.cx_entity or _center.cx_creator) then
+	if _center and (_center.cx_entity or _center.cx_creator or _center.cx_successor) then
 		-- dedicated JOKER-lettering layer: frame {2,0} of the float atlas
-		-- holds just the corner text, extracted from the base art
+		-- holds just the corner text, extracted from the base art. Centers can
+		-- override via cx_letters_pos — the Successor's gutter-padded sheet
+		-- has its arrows at {2,0}, so its letters live at {4,0}
 		if self.children.cx_letters then self.children.cx_letters:remove() end
 		self.children.cx_letters = Sprite(
 			self.T.x,
@@ -1603,7 +1605,7 @@ function Card:set_sprites(_center, _front)
 			self.T.w,
 			self.T.h,
 			G.ASSET_ATLAS[_center.atlas or _center.set],
-			{x = 2, y = 0}
+			_center.cx_letters_pos or {x = 2, y = 0}
 		)
 		self.children.cx_letters.role.draw_major = self
 		self.children.cx_letters.states.hover.can = false
@@ -1790,6 +1792,7 @@ SMODS.Joker {
     -- other under bilinear filtering, and the base's inked right border was
     -- ghosting onto the arrows layer's left edge as a floating card outline
     soul_pos = { x = 2, y = 0, draw = cx_successor_soul_draw },
+    cx_letters_pos = { x = 4, y = 0 },
     calculate = function(self, card, context)
         if not card.added_to_deck then return end
         if context.joker_main then
