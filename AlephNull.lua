@@ -2677,8 +2677,10 @@ end
 -- dissolve, so the money lands and the card remains sellable again
 local card_sell_card_ref = Card.sell_card
 function Card:sell_card()
-    local staying = cx_is_creator_card(self) or cx_is_entity_card(self)
-    if cx_is_creator_card(self) then
+    local staying = cx_is_creator_card(self) or cx_is_entity_card(self) or cx_is_successor_card(self)
+    -- the Entity needs no flag — its blanket dissolve immunity already
+    -- swallows the sell; Creator and Successor use the one-shot flag
+    if cx_is_creator_card(self) or cx_is_successor_card(self) then
         self.cx_sell_stay = true
     end
     local ret = card_sell_card_ref(self)
