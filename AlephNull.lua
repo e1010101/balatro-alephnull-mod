@@ -1763,9 +1763,10 @@ end
 local CX_SUCCESSOR_TOP = 1e308
 
 -- the bridge from ^^^100 to the ceiling: past 3 arrows, the arrow count
--- itself starts climbing — it SQUARES every rung (the successor operation
--- applied to its own operator) until it lands on the ceiling
-local CX_SUCCESSOR_ARROWS = {100, 1e4, 1e8, 1e16, 1e32, 1e64, 1e128, 1e256, CX_SUCCESSOR_TOP}
+-- climbs its own hyperoperation ladder over 100 — arrows = 100, then
+-- 100^100 = 1e200, then 100^^100 which overflows every float, so the last
+-- rung lands on the ceiling
+local CX_SUCCESSOR_ARROWS = {100, 1e200, CX_SUCCESSOR_TOP}
 
 -- SUCCESSOR: climbs the whole hyperoperation ladder every scored hand, one
 -- rung per popup, ending at the library's finite ceiling (1e308 arrows). The
@@ -1780,8 +1781,8 @@ SMODS.Joker {
         text = {
             'Every scored hand climbs the whole ladder:',
             '{C:color_rgb}+100{}, {C:color_rgb}X100{}, {C:color_rgb}^100{}, {C:color_rgb}^^100{}, {C:color_rgb}^^^100{},',
-            'then the {C:attention}arrow count{} squares each rung:',
-            '{C:color_rgb}100{}, {C:color_rgb}1e4{}, {C:color_rgb}1e8{} ... {C:color_rgb}1e308 arrows{} of 100,',
+            'then the {C:attention}arrow count{} climbs its own ladder:',
+            '{C:color_rgb}100{}, {C:color_rgb}100^100{}, {C:color_rgb}1e308 arrows{} of 100,',
             'each to {C:chips}Chips{} and {C:mult}Mult{}',
             '{C:color_rgb}Removes and prevents{} debuffs and',
             'negative stickers on {C:attention}every card{}'
