@@ -1757,33 +1757,22 @@ local function cx_successor_soul_draw(card, scale_mod, rotate_mod)
     fs:draw_shader('cx_successor_fractal', nil, send, nil, card.children.center, s, r, 0, bob)
 end
 
--- the top of the ladder: the largest finite arrow count amulet can hold.
--- Big:arrow collapses to literal Infinity past R.MAX_VALUE (~1.797e308),
--- so 1e308 is the last stop before the number line ends
-local CX_SUCCESSOR_TOP = 1e308
-
--- the bridge from ^^^100 to the ceiling: past 3 arrows, the arrow count
--- climbs its own hyperoperation ladder over 100 — arrows = 100, then
--- 100^100 = 1e200, then 100^^100 which overflows every float, so the last
--- rung lands on the ceiling
-local CX_SUCCESSOR_ARROWS = {100, 1e200, CX_SUCCESSOR_TOP}
-
--- SUCCESSOR: climbs the whole hyperoperation ladder every scored hand, one
--- rung per popup, ending at the library's finite ceiling (1e308 arrows). The
--- e/ee/eee/hyper rungs are amulet's Talisman effect keys — without a
--- big-number lib SMODS never reads those keys and the cascade degrades to
--- its +100/X100 rungs. The debuff/sticker aura lives in cx_successor_cleanse
--- and the set_debuff wrapper.
+-- SUCCESSOR: climbs the exponent-tower ladder every scored hand, one rung
+-- per popup — +100, X100, ^100, ^100^100, ^100^100^100 (right-associative
+-- towers: 100^100 = 1e200, 100^100^100 = 10^(2e200)). The x/e rungs are
+-- amulet's Talisman effect keys — without a big-number lib SMODS never
+-- reads those keys and the cascade degrades to its +100/X100 rungs. The
+-- debuff/sticker aura lives in cx_successor_cleanse and the set_debuff
+-- wrapper.
 SMODS.Joker {
     key = 'successor',
     loc_txt = {
         name = 'Successor',
         text = {
-            'Every scored hand climbs the whole ladder:',
-            '{C:color_rgb}+100{}, {C:color_rgb}X100{}, {C:color_rgb}^100{}, {C:color_rgb}^^100{}, {C:color_rgb}^^^100{},',
-            'then the {C:attention}arrow count{} climbs its own ladder:',
-            '{C:color_rgb}100{}, {C:color_rgb}100^100{}, {C:color_rgb}1e308 arrows{} of 100,',
-            'each to {C:chips}Chips{} and {C:mult}Mult{}',
+            'Every scored hand climbs the ladder:',
+            '{C:color_rgb}+100{}, {C:color_rgb}X100{}, {C:color_rgb}^100{},',
+            '{C:color_rgb}^100^100{}, {C:color_rgb}^100^100^100{}',
+            'to {C:chips}Chips{} and {C:mult}Mult{}',
             '{C:color_rgb}Removes and prevents{} debuffs and',
             'negative stickers on {C:attention}every card{}'
         }
@@ -1809,16 +1798,23 @@ SMODS.Joker {
     calculate = function(self, card, context)
         if not card.added_to_deck then return end
         if context.joker_main then
-            -- built innermost-out so the applied order ascends: the arrow
-            -- rungs wrap around each other top-down, then the named rungs
-            -- (^^^, ^^, ^, X, +) wrap around those
+            -- built innermost-out so the applied order ascends the ladder.
+            -- The tower exponents outgrow plain floats at three storeys, so
+            -- those rungs are Bigs, gated on the lib being present. Custom
+            -- popup messages: the default stringify would render the towers
+            -- as '^1e+200' / a Big concat (crash risk) — show the towers.
             local rung = nil
-            for i = #CX_SUCCESSOR_ARROWS, 1, -1 do
-                rung = { hyper_chips = {CX_SUCCESSOR_ARROWS[i], 100},
-                         hyper_mult = {CX_SUCCESSOR_ARROWS[i], 100}, extra = rung }
+            if Big and to_big then
+                local tower2 = to_big(100):pow(100)      -- 100^100 = 1e200
+                local tower3 = to_big(100):pow(tower2)   -- 100^100^100 = 10^(2e200)
+                rung = { e_chips = tower3, e_mult = tower3,
+                         echip_message = {message = '^100^100^100', colour = G.C.DARK_EDITION},
+                         emult_message = {message = '^100^100^100', colour = G.C.DARK_EDITION} }
+                rung = { e_chips = tower2, e_mult = tower2,
+                         echip_message = {message = '^100^100', colour = G.C.DARK_EDITION},
+                         emult_message = {message = '^100^100', colour = G.C.DARK_EDITION},
+                         extra = rung }
             end
-            rung = { eee_chips = 100, eee_mult = 100, extra = rung }
-            rung = { ee_chips = 100, ee_mult = 100, extra = rung }
             rung = { e_chips = 100, e_mult = 100, extra = rung }
             rung = { x_chips = 100, x_mult = 100, extra = rung }
             return { chips = 100, mult = 100, extra = rung }
