@@ -1762,6 +1762,11 @@ end
 -- so 1e308 is the last stop before the number line ends
 local CX_SUCCESSOR_TOP = 1e308
 
+-- the bridge from ^^^100 to the ceiling: past 3 arrows, the arrow count
+-- itself starts climbing — it SQUARES every rung (the successor operation
+-- applied to its own operator) until it lands on the ceiling
+local CX_SUCCESSOR_ARROWS = {100, 1e4, 1e8, 1e16, 1e32, 1e64, 1e128, 1e256, CX_SUCCESSOR_TOP}
+
 -- SUCCESSOR: climbs the whole hyperoperation ladder every scored hand, one
 -- rung per popup, ending at the library's finite ceiling (1e308 arrows). The
 -- e/ee/eee/hyper rungs are amulet's Talisman effect keys — without a
@@ -1775,7 +1780,9 @@ SMODS.Joker {
         text = {
             'Every scored hand climbs the whole ladder:',
             '{C:color_rgb}+100{}, {C:color_rgb}X100{}, {C:color_rgb}^100{}, {C:color_rgb}^^100{}, {C:color_rgb}^^^100{},',
-            'then {C:color_rgb}1e308 arrows{} of 100, each to {C:chips}Chips{} and {C:mult}Mult{}',
+            'then the {C:attention}arrow count{} squares each rung:',
+            '{C:color_rgb}100{}, {C:color_rgb}1e4{}, {C:color_rgb}1e8{} ... {C:color_rgb}1e308 arrows{} of 100,',
+            'each to {C:chips}Chips{} and {C:mult}Mult{}',
             '{C:color_rgb}Removes and prevents{} debuffs and',
             'negative stickers on {C:attention}every card{}'
         }
@@ -1801,14 +1808,19 @@ SMODS.Joker {
     calculate = function(self, card, context)
         if not card.added_to_deck then return end
         if context.joker_main then
-            return {
-                chips = 100, mult = 100,
-                extra = { x_chips = 100, x_mult = 100,
-                extra = { e_chips = 100, e_mult = 100,
-                extra = { ee_chips = 100, ee_mult = 100,
-                extra = { eee_chips = 100, eee_mult = 100,
-                extra = { hyper_chips = {CX_SUCCESSOR_TOP, 100}, hyper_mult = {CX_SUCCESSOR_TOP, 100} } } } } }
-            }
+            -- built innermost-out so the applied order ascends: the arrow
+            -- rungs wrap around each other top-down, then the named rungs
+            -- (^^^, ^^, ^, X, +) wrap around those
+            local rung = nil
+            for i = #CX_SUCCESSOR_ARROWS, 1, -1 do
+                rung = { hyper_chips = {CX_SUCCESSOR_ARROWS[i], 100},
+                         hyper_mult = {CX_SUCCESSOR_ARROWS[i], 100}, extra = rung }
+            end
+            rung = { eee_chips = 100, eee_mult = 100, extra = rung }
+            rung = { ee_chips = 100, ee_mult = 100, extra = rung }
+            rung = { e_chips = 100, e_mult = 100, extra = rung }
+            rung = { x_chips = 100, x_mult = 100, extra = rung }
+            return { chips = 100, mult = 100, extra = rung }
         end
     end
 }
